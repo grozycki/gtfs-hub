@@ -1,0 +1,134 @@
+"""Searching and resolving stable keys across snapshots."""
+
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+
+from aiohttp import ClientSession
+
+from conftest import FeedServer, base_tables, write_feed
+from gtfs_hub import GenericProvider, GtfsHub, LineKey, ResolvedId
+
+
+async def make_hub(
+    tmp_path: Path,
+    feed_server: FeedServer,
+    session: ClientSession,
+    now: Callable[[], datetime],
+    *feeds: dict[str, tuple[str, list[tuple[object, ...]]]],
+    stop_key: str = "stop_id",
+) -> GtfsHub:
+    urls = [
+        feed_server.put(f"{n}.zip", write_feed(tmp_path / f"{n}.zip", tables))
+        for n, tables in enumerate(feeds)
+    ]
+    provider = GenericProvider(urls, stop_key=stop_key)  # type: ignore[arg-type]
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
+    await hub.async_sync([])
+    return hub
+
+
+async def test_bus_and_tram_with_one_number_are_two_lines(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables(
+        routes=[("bus", "a1", "11", "Bus", 3, ""), ("tram", "a1", "11", "Tram", 0, "")]
+    )
+    hub = await make_hub(tmp_path, feed_server, session, now, tables)
+    found = await hub.async_search_lines("11")
+    assert {line.key for line in found} == {LineKey(3, "11"), LineKey(0, "11")}
+    assert await hub.async_resolve_line(LineKey(0, "11")) == [ResolvedId(1, "tram")]
+
+
+async def test_changed_route_id_resolves_under_one_key(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    first = base_tables("20261101", "20261103", routes=[("old", "a1", "11", "L", 3, "")])
+    second = base_tables("20261104", "20261107", routes=[("new", "a1", "11", "L", 3, "")])
+    hub = await make_hub(tmp_path, feed_server, session, now, first, second)
+    resolved = await hub.async_resolve_line(LineKey(3, "11"))
+    assert [item.id for item in resolved] == ["old", "new"]
+    assert len(await hub.async_search_lines("11")) == 1
+
+
+async def test_stop_key_with_two_ids(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    first = base_tables("20261101", "20261103", stops=[("621", "C-X", "Stop", 50.0, 19.0)])
+    second = base_tables("20261104", "20261107", stops=[("12957", "C-X", "Stop", 50.0, 19.0)])
+    hub = await make_hub(tmp_path, feed_server, session, now, first, second, stop_key="stop_code")
+    assert [item.id for item in await hub.async_resolve_stop("C-X")] == ["621", "12957"]
+    [stop] = await hub.async_search_stops("stop")
+    assert stop.key == "C-X"
+
+
+async def test_absent_keys_resolve_to_nothing(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
+    assert await hub.async_resolve_stop("gone") == []
+    assert await hub.async_resolve_line(LineKey(3, "99")) == []
+
+
+async def test_stop_missing_from_one_snapshot_stays(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    weekday = base_tables("20261102", "20261106")
+    weekend = base_tables("20261107", "20261108", stops=[("s1", "C-A", "Other", 50.1, 19.1)])
+    hub = await make_hub(tmp_path, feed_server, session, now, weekday, weekend)
+    assert await hub.async_search_stops("Gamma")
+    assert await hub.async_resolve_stop("s3")
+
+
+async def test_line_search_by_number_and_long_name(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables(
+        routes=[
+            ("r1", "a1", "111", "Other", 3, ""),
+            ("r2", "a1", "11", "Long Eleven", 3, "FF0000"),
+        ]
+    )
+    hub = await make_hub(tmp_path, feed_server, session, now, tables)
+    found = await hub.async_search_lines("11")
+    assert [line.key.short_name for line in found] == ["11", "111"]
+    assert found[0].agency == "Agency One"
+    assert found[0].long_name == "Long Eleven"
+    assert [line.key.short_name for line in await hub.async_search_lines("eleven")] == ["11"]
+
+
+async def test_stop_search_ignores_case_and_diacritics(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
+    for query in ("łódź", "ŁÓDŹ", "lodz", "główna"):
+        [stop] = await hub.async_search_stops(query)
+        assert stop.name == "Łódź Główna"
+    [stop] = await hub.async_search_stops("c-b")
+    assert (stop.key, stop.code, stop.latitude) == ("s2", "C-B", 50.2)
+
+
+async def test_search_treats_wildcards_as_text(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
+    assert await hub.async_search_stops("%") == []
+    assert await hub.async_search_lines("_") == []
+
+
+async def test_search_gives_one_result_per_key(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    first = base_tables("20261101", "20261103")
+    second = base_tables("20261104", "20261107")
+    hub = await make_hub(tmp_path, feed_server, session, now, first, second)
+    assert len(await hub.async_search_stops("beta")) == 1
+    assert len(await hub.async_search_lines("11")) == 1
+
+
+async def test_empty_colour_stays_absent(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
+    assert (await hub.async_search_lines("12"))[0].color is None
+    assert (await hub.async_search_lines("11"))[0].color == "FF0000"

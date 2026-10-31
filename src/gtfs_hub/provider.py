@@ -1,0 +1,54 @@
+"""The contract between core and providers."""
+
+from typing import Protocol, runtime_checkable
+
+from aiohttp import ClientSession
+
+from .models import Capabilities, RealtimeEndpoints, StaticFeedRef, StopKeyField
+
+
+@runtime_checkable
+class Provider(Protocol):
+    """A source of GTFS data."""
+
+    key: str
+    name: str
+    attribution: str | None
+    stop_key: StopKeyField
+    capabilities: Capabilities
+
+    async def async_list_static_feeds(self, session: ClientSession) -> list[StaticFeedRef]:
+        """Return the current schedule files."""
+        ...
+
+    def realtime_endpoints(self) -> RealtimeEndpoints:
+        """Return where live data is."""
+        ...
+
+    def normalize_static(self, table: str, row: dict[str, str]) -> dict[str, str]:
+        """Return a schedule row, adjusted for quirks of the source."""
+        ...
+
+    def vehicle_key(self, vehicle_id: str, label: str, trip_id: str) -> str | None:
+        """Return an identity that survives a change of trip, or None."""
+        ...
+
+
+class BaseProvider:
+    """Defaults for a provider, which overrides only what it needs."""
+
+    attribution: str | None = None
+    stop_key: StopKeyField = "stop_id"
+    capabilities: Capabilities = Capabilities()
+
+    def realtime_endpoints(self) -> RealtimeEndpoints:
+        """Return no endpoints."""
+        return RealtimeEndpoints()
+
+    def normalize_static(self, table: str, row: dict[str, str]) -> dict[str, str]:
+        """Return the row unchanged."""
+        return row
+
+    def vehicle_key(self, vehicle_id: str, label: str, trip_id: str) -> str | None:
+        """Return no identity: a raw vehicle ID proves nothing."""
+        return None
