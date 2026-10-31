@@ -13,6 +13,7 @@ dependencies = ["aiohttp>=3.10", "gtfs-realtime-bindings>=1.0"]
 
 [dependency-groups]
 dev = [
+    "gtfs-realtime-bindings==2.0.0",
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
