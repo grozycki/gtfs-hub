@@ -4,11 +4,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from typing import Final
 
 from google.protobuf.message import DecodeError
 from google.transit import gtfs_realtime_pb2
 
 from .errors import GtfsFeedError
+
+# By name, as older bindings, such as those Home Assistant pins, have no DELETED member.
+_CANCELLED: Final = frozenset({"CANCELED", "DELETED"})
 
 
 class StopRelationship(StrEnum):
@@ -95,8 +99,7 @@ def parse_trip_updates(body: bytes) -> RealtimeData:
         message.ParseFromString(body)
     except DecodeError as err:
         raise GtfsFeedError(f"Corrupt realtime message: {err}") from err
-    kinds = gtfs_realtime_pb2.TripDescriptor
-    cancelled = (kinds.CANCELED, kinds.DELETED)
+    relationships = gtfs_realtime_pb2.TripDescriptor.ScheduleRelationship
     trips = {}
     for entity in message.entity:
         if not entity.HasField("trip_update") or not entity.trip_update.trip.trip_id:
@@ -105,7 +108,7 @@ def parse_trip_updates(body: bytes) -> RealtimeData:
         trips[update.trip.trip_id] = TripUpdate(
             trip_id=update.trip.trip_id,
             start_date=_parse_start_date(update.trip.start_date),
-            cancelled=update.trip.schedule_relationship in cancelled,
+            cancelled=relationships.Name(update.trip.schedule_relationship) in _CANCELLED,
             stops=tuple(_stop_update(stop) for stop in update.stop_time_update),
         )
     stamp = message.header.timestamp

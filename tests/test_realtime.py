@@ -212,9 +212,8 @@ async def test_cancelled_trip_stays_listed(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession
 ) -> None:
     hub = await make_hub(tmp_path, feed_server, session)
-    for relationship in (pb.TripDescriptor.CANCELED, pb.TripDescriptor.DELETED):
-        departure = await first(hub, message({"trip": "t1", "trip_relationship": relationship}))
-        assert departure.status is DepartureStatus.CANCELLED
+    data = message({"trip": "t1", "trip_relationship": pb.TripDescriptor.CANCELED})
+    assert (await first(hub, data)).status is DepartureStatus.CANCELLED
 
 
 async def test_skipped_stop(
