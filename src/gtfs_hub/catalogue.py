@@ -169,3 +169,16 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
         ),
         key=lambda choice: (fold(choice.stop.name), choice.headsigns, choice.stop.key),
     )
+
+
+def trip_lines(conn: sqlite3.Connection) -> dict[str, tuple[LineKey, str | None]]:
+    """Return the line and headsign of every stored trip, the newest snapshot winning."""
+    rows = conn.execute(
+        """
+        SELECT t.trip_id, l.route_type, l.short_name, t.headsign
+        FROM trips t
+        JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
+        ORDER BY t.snapshot
+        """
+    )
+    return {row[0]: (LineKey(row[1], row[2]), row[3]) for row in rows}

@@ -29,9 +29,12 @@ from .models import (
     StopChoice,
     StopKey,
     SyncResult,
+    TripId,
+    Vehicle,
+    VehicleKey,
 )
 from .provider import Provider
-from .realtime import RealtimeData, parse_trip_updates
+from .realtime import RealtimeData, parse_trip_updates, parse_vehicle_positions
 from .schema import SCHEMA_VERSION, open_read, open_work, stored_version
 from .snapshots import is_expired, missing_dates, select_snapshot
 
@@ -107,6 +110,11 @@ class GtfsHub:
         self._session = session
         self._clock = clock
         self._lock = asyncio.Lock()
+
+    @property
+    def provider(self) -> Provider:
+        """Return the source of this schedule."""
+        return self._provider
 
     async def _run[T](self, job: Callable[[], T]) -> T:
         return await asyncio.get_running_loop().run_in_executor(None, job)
@@ -216,24 +224,58 @@ class GtfsHub:
     async def _read[T](self, job: Callable[[sqlite3.Connection], T]) -> T:
         return await self._run(partial(_with_conn, open_read, self._path, job))
 
+    async def _async_fetch_message(self, url: str) -> bytes:
+        headers = self._provider.realtime_endpoints().headers
+        try:
+            async with self._session.get(
+                url, headers=headers, timeout=_REALTIME_TIMEOUT
+            ) as response:
+                raise_for_status(response, url)
+                return await response.read()
+        except (ClientError, TimeoutError) as err:
+            raise GtfsConnectionError(f"Cannot fetch {url}: {err}") from err
+
     async def async_fetch_realtime(self) -> RealtimeData | None:
         """Fetch trip updates, or return None when the source has no such endpoint.
 
         Poll this once and pass the result to each departures call.
         """
-        endpoints = self._provider.realtime_endpoints()
-        url = endpoints.trip_updates
+        url = self._provider.realtime_endpoints().trip_updates
         if url is None:
             return None
-        try:
-            async with self._session.get(
-                url, headers=endpoints.headers, timeout=_REALTIME_TIMEOUT
-            ) as response:
-                raise_for_status(response, url)
-                body = await response.read()
-        except (ClientError, TimeoutError) as err:
-            raise GtfsConnectionError(f"Cannot fetch {url}: {err}") from err
+        body = await self._async_fetch_message(url)
         return await self._run(partial(parse_trip_updates, body))
+
+    async def async_fetch_vehicles(self) -> list[Vehicle]:
+        """Fetch vehicles of the stored lines. Those the provider cannot identify are left out."""
+        url = self._provider.realtime_endpoints().vehicle_positions
+        if url is None:
+            return []
+        body = await self._async_fetch_message(url)
+        positions = await self._run(partial(parse_vehicle_positions, body))
+        trips = await self._read(catalogue.trip_lines)
+        vehicles = []
+        for position in positions:
+            trip = trips.get(position.trip_id)
+            key = self._provider.vehicle_key(position.vehicle_id, position.label, position.trip_id)
+            if (
+                trip is not None
+                and key is not None
+                and position.latitude is not None
+                and position.longitude is not None
+            ):
+                vehicles.append(
+                    Vehicle(
+                        VehicleKey(key),
+                        trip[0],
+                        TripId(position.trip_id),
+                        trip[1],
+                        position.latitude,
+                        position.longitude,
+                        position.measured,
+                    )
+                )
+        return vehicles
 
     async def async_departures(
         self,

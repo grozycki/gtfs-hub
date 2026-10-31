@@ -56,6 +56,18 @@ class RealtimeData:
         return self.timestamp is None or now - self.timestamp > max_age
 
 
+@dataclass(frozen=True, slots=True)
+class VehiclePosition:
+    """One vehicle position as the feed sent it."""
+
+    vehicle_id: str
+    label: str
+    trip_id: str
+    latitude: float | None
+    longitude: float | None
+    measured: datetime | None
+
+
 def _event(update: gtfs_realtime_pb2.TripUpdate.StopTimeUpdate) -> tuple[int | None, int | None]:
     for name in ("departure", "arrival"):
         if update.HasField(name):
@@ -113,3 +125,31 @@ def parse_trip_updates(body: bytes) -> RealtimeData:
         )
     stamp = message.header.timestamp
     return RealtimeData(datetime.fromtimestamp(stamp, UTC) if stamp else None, trips)
+
+
+def parse_vehicle_positions(body: bytes) -> list[VehiclePosition]:
+    """Parse a protobuf message of vehicle positions. Blocks on large messages."""
+    message = gtfs_realtime_pb2.FeedMessage()
+    try:
+        message.ParseFromString(body)
+    except DecodeError as err:
+        raise GtfsFeedError(f"Corrupt realtime message: {err}") from err
+    positions = []
+    for entity in message.entity:
+        if not entity.HasField("vehicle"):
+            continue
+        vehicle = entity.vehicle
+        has_position = vehicle.HasField("position")
+        positions.append(
+            VehiclePosition(
+                vehicle_id=vehicle.vehicle.id,
+                label=vehicle.vehicle.label,
+                trip_id=vehicle.trip.trip_id,
+                latitude=vehicle.position.latitude if has_position else None,
+                longitude=vehicle.position.longitude if has_position else None,
+                measured=(
+                    datetime.fromtimestamp(vehicle.timestamp, UTC) if vehicle.timestamp else None
+                ),
+            )
+        )
+    return positions

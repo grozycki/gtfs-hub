@@ -10,6 +10,7 @@ type StopKeyField = Literal["stop_id", "stop_code"]
 
 StopKey = NewType("StopKey", str)
 TripId = NewType("TripId", str)
+VehicleKey = NewType("VehicleKey", str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +116,19 @@ class SyncResult:
     skipped: int = 0
     extended: int = 0
     removed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Vehicle:
+    """A vehicle on a selected line. Optional values stay None when not sent."""
+
+    key: VehicleKey
+    line: LineKey
+    trip_id: TripId
+    headsign: str | None
+    latitude: float
+    longitude: float
+    measured: datetime | None
 
 
 class DepartureStatus(StrEnum):
