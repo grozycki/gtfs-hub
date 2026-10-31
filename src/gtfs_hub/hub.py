@@ -7,18 +7,20 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Collection
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession
 
 from . import catalogue, importer
-from .download import async_download
-from .errors import GtfsFeedError
-from .models import Line, LineKey, ResolvedId, Snapshot, StaticFeedRef, Stop, SyncResult
+from .departures import list_departures
+from .download import async_download, raise_for_status
+from .errors import GtfsConnectionError, GtfsFeedError
+from .models import Departure, Line, LineKey, ResolvedId, Snapshot, StaticFeedRef, Stop, SyncResult
 from .provider import Provider
+from .realtime import RealtimeData, parse_trip_updates
 from .schema import SCHEMA_VERSION, open_read, open_work, stored_version
 from .snapshots import is_expired, missing_dates, select_snapshot
 
@@ -193,6 +195,41 @@ class GtfsHub:
 
     async def _read[T](self, job: Callable[[sqlite3.Connection], T]) -> T:
         return await self._run(partial(_with_conn, open_read, self._path, job))
+
+    async def async_fetch_realtime(self) -> RealtimeData | None:
+        """Fetch trip updates, or return None when the source has no such endpoint.
+
+        Poll this once and pass the result to each departures call.
+        """
+        endpoints = self._provider.realtime_endpoints()
+        url = endpoints.trip_updates
+        if url is None:
+            return None
+        try:
+            async with self._session.get(url, headers=endpoints.headers) as response:
+                raise_for_status(response, url)
+                body = await response.read()
+        except (ClientError, TimeoutError) as err:
+            raise GtfsConnectionError(f"Cannot fetch {url}: {err}") from err
+        return await self._run(partial(parse_trip_updates, body))
+
+    async def async_departures(
+        self,
+        stop_key: str,
+        *,
+        realtime: RealtimeData | None = None,
+        limit: int = 10,
+        horizon: timedelta = timedelta(hours=12),
+        max_age: timedelta = timedelta(minutes=5),
+    ) -> list[Departure]:
+        """Return upcoming departures of a stop for the stored lines, soonest first.
+
+        Realtime older than max_age is ignored, so the schedule still answers.
+        """
+        now = self._clock()
+        return await self._read(
+            lambda conn: list_departures(conn, stop_key, now, realtime, max_age, limit, horizon)
+        )
 
     async def async_snapshots(self) -> list[Snapshot]:
         """Return the stored snapshots."""

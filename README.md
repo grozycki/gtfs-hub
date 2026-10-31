@@ -35,6 +35,27 @@ async def main(url: str, database: Path) -> None:
 
 Call `async_sync` with the full selection whenever the source may have changed or the selection did. Lines that are new are imported, lines that are gone are removed, and unchanged files are not downloaded. On failure it raises a `GtfsError`, and the previous database stays in use. The database is a cache, so it is safe to delete: the next sync rebuilds it.
 
+## Departures
+
+Fetch realtime once per poll, and pass it to each departures call. A failed fetch only means passing `None`: the schedule still answers.
+
+```python
+from gtfs_hub import GtfsError, GtfsHub
+
+
+async def show_departures(hub: GtfsHub, stop_key: str) -> None:
+    try:
+        realtime = await hub.async_fetch_realtime()
+    except GtfsError:
+        realtime = None
+    for departure in await hub.async_departures(stop_key, realtime=realtime, limit=5):
+        print(departure.line.short_name, departure.headsign, departure.expected, departure.status)
+```
+
+Departures cover the lines stored by the last sync, on every service date reaching the period, including night service past 24:00. Times are in UTC. `scheduled` is always set, while `predicted` and `delay` stay `None` without a usable update, so "no data" never reads as "on time". Stops a running trip has passed give no departure, and points where riders cannot board give none either. Realtime older than `max_age` (5 minutes by default) is ignored, and `RealtimeData.is_stale` tells a consumer so. When no snapshot covers today, `async_departures` raises `GtfsNoDataError`.
+
+Trips in `frequencies.txt` are not supported and are left out, with a log line.
+
 ## Generic provider
 
 | Argument | Meaning |
@@ -51,6 +72,7 @@ It reports no capabilities and no vehicle identity until a source has been surve
 
 - **Lines** are `LineKey(route_type, short_name)`. Store this, never a `route_id`.
 - **Stops** are the value of the provider's `stop_key` field. One key can resolve to several `stop_id` values.
+- `Line.url` and `Stop.url` carry `route_url` and `stop_url` when the source fills them.
 - Empty results from `async_resolve_line` and `async_resolve_stop` mean the key is in no current snapshot.
 
 ## Coverage

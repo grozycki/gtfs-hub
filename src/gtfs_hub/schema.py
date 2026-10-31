@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .errors import GtfsNoDataError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE snapshots (
@@ -39,6 +39,7 @@ CREATE TABLE lines (
     color TEXT,
     text_color TEXT,
     search_text TEXT NOT NULL,
+    url TEXT,
     PRIMARY KEY (snapshot, route_id)
 ) WITHOUT ROWID;
 CREATE INDEX lines_key ON lines (route_type, short_name);
@@ -51,14 +52,32 @@ CREATE TABLE stops (
     latitude REAL,
     longitude REAL,
     search_text TEXT NOT NULL,
+    url TEXT,
     PRIMARY KEY (snapshot, stop_id)
 ) WITHOUT ROWID;
 CREATE INDEX stops_key ON stops (stop_key);
+CREATE TABLE services (
+    snapshot INTEGER NOT NULL,
+    service_id TEXT NOT NULL,
+    weekdays TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    PRIMARY KEY (snapshot, service_id)
+) WITHOUT ROWID;
+CREATE TABLE service_exceptions (
+    snapshot INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    service_id TEXT NOT NULL,
+    exception_type INTEGER NOT NULL,
+    PRIMARY KEY (snapshot, day, service_id)
+) WITHOUT ROWID;
 CREATE TABLE trips (
     snapshot INTEGER NOT NULL,
     trip_id TEXT NOT NULL,
     route_id TEXT NOT NULL,
     direction_id INTEGER,
+    service_id TEXT NOT NULL,
+    headsign TEXT,
     PRIMARY KEY (snapshot, trip_id)
 ) WITHOUT ROWID;
 CREATE INDEX trips_route ON trips (snapshot, route_id);
@@ -68,7 +87,10 @@ CREATE TABLE stop_times (
     stop_sequence INTEGER NOT NULL,
     stop_id TEXT NOT NULL,
     arrival_seconds INTEGER,
-    departure_seconds INTEGER
+    departure_seconds INTEGER,
+    pickup_type INTEGER NOT NULL,
+    drop_off_type INTEGER NOT NULL,
+    headsign TEXT
 );
 CREATE INDEX stop_times_trip ON stop_times (snapshot, trip_id);
 CREATE INDEX stop_times_stop ON stop_times (snapshot, stop_id, departure_seconds);

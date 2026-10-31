@@ -113,6 +113,7 @@ async def test_file_without_a_window_is_refused(
 ) -> None:
     tables = base_tables()
     del tables["feed_info"]
+    del tables["calendar"]
     url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
     hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
     with pytest.raises(GtfsFeedError, match="window"):

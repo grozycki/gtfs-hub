@@ -7,11 +7,11 @@ from .models import Line, LineKey, ResolvedId, Snapshot, Stop
 from .text import fold
 
 _LINE_COLUMNS = """
-    l.route_type, l.short_name, l.long_name, a.name, l.color, l.text_color
+    l.route_type, l.short_name, l.long_name, a.name, l.color, l.text_color, l.url
     FROM lines l
     LEFT JOIN agencies a ON a.snapshot = l.snapshot AND a.agency_id = l.agency_id
 """
-_STOP_COLUMNS = "s.stop_key, s.name, s.code, s.latitude, s.longitude"
+_STOP_COLUMNS = "s.stop_key, s.name, s.code, s.latitude, s.longitude, s.url"
 
 
 def _pattern(query: str) -> str:
@@ -19,8 +19,8 @@ def _pattern(query: str) -> str:
     return f"%{escaped}%"
 
 
-def _line(row: tuple[int, str, str | None, str | None, str | None, str | None]) -> Line:
-    return Line(LineKey(row[0], row[1]), row[2], row[3], row[4], row[5])
+def _line(row: tuple[int, str, str | None, str | None, str | None, str | None, str | None]) -> Line:
+    return Line(LineKey(row[0], row[1]), row[2], row[3], row[4], row[5], row[6])
 
 
 def read_snapshots(conn: sqlite3.Connection) -> list[Snapshot]:
@@ -93,11 +93,12 @@ def stops_of_line(conn: sqlite3.Connection, key: LineKey) -> list[Stop]:
         JOIN stop_times st ON st.snapshot = t.snapshot AND st.trip_id = t.trip_id
         JOIN stops s ON s.snapshot = st.snapshot AND s.stop_id = st.stop_id
         WHERE l.route_type = ? AND l.short_name = ?
+            AND NOT (st.pickup_type = 1 AND st.drop_off_type = 1)
         ORDER BY s.snapshot DESC
         """,
         (key.route_type, key.short_name),
     )
     found: dict[str, Stop] = {}
     for row in rows:
-        found.setdefault(row[0], Stop(*row[:5]))
+        found.setdefault(row[0], Stop(*row[:6]))
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))

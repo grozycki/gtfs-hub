@@ -2,6 +2,7 @@
 
 import csv
 import io
+import logging
 import sqlite3
 import zipfile
 from collections.abc import Collection, Iterable, Iterator
@@ -18,6 +19,17 @@ from .provider import Provider
 from .text import fold
 
 _BATCH_SIZE = 5_000
+_WEEKDAY_COLUMNS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,11 +158,12 @@ def _import_catalogue(
             _empty_to_none(row.get("route_color")),
             _empty_to_none(row.get("route_text_color")),
             fold(f"{key.short_name} {long_name or ''}"),
+            _empty_to_none(row.get("route_url")),
         )
 
     _insert_batches(
         conn,
-        "INSERT OR REPLACE INTO lines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO lines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (line(row) for row in _rows(archive, "routes", ("route_id", "route_type"), provider)),
     )
 
@@ -167,17 +180,66 @@ def _import_catalogue(
             _float_or_none(row.get("stop_lat")),
             _float_or_none(row.get("stop_lon")),
             fold(f"{name} {code or ''}"),
+            _empty_to_none(row.get("stop_url")),
         )
 
     _insert_batches(
         conn,
-        "INSERT OR REPLACE INTO stops VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO stops VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             stop(row)
             for row in _rows(archive, "stops", ("stop_id",), provider)
             if (row.get("location_type") or "0").strip() == "0"
         ),
     )
+
+
+def _import_services(
+    conn: sqlite3.Connection, archive: zipfile.ZipFile, snapshot: int, provider: Provider
+) -> None:
+    names = archive.namelist()
+    if "calendar.txt" in names:
+        required = ("service_id", *_WEEKDAY_COLUMNS, "start_date", "end_date")
+        _insert_batches(
+            conn,
+            "INSERT OR REPLACE INTO services VALUES (?, ?, ?, ?, ?)",
+            (
+                (
+                    snapshot,
+                    row["service_id"],
+                    "".join(row[day].strip() for day in _WEEKDAY_COLUMNS),
+                    _parse_date(row["start_date"]).isoformat(),
+                    _parse_date(row["end_date"]).isoformat(),
+                )
+                for row in _rows(archive, "calendar", required, provider)
+            ),
+        )
+    if "calendar_dates.txt" in names:
+        _insert_batches(
+            conn,
+            "INSERT OR REPLACE INTO service_exceptions VALUES (?, ?, ?, ?)",
+            (
+                (
+                    snapshot,
+                    _parse_date(row["date"]).isoformat(),
+                    row["service_id"],
+                    int(row["exception_type"]),
+                )
+                for row in _rows(
+                    archive, "calendar_dates", ("service_id", "date", "exception_type"), provider
+                )
+            ),
+        )
+
+
+def _frequency_trips(archive: zipfile.ZipFile, provider: Provider) -> set[str]:
+    """Return trips that stand for many: their stop times are not a timetable."""
+    if "frequencies.txt" not in archive.namelist():
+        return set()
+    trips = {row["trip_id"] for row in _rows(archive, "frequencies", ("trip_id",), provider)}
+    if trips:
+        _LOGGER.warning("Leaving out %d headway trips: frequencies.txt is unsupported", len(trips))
+    return trips
 
 
 def _import_timetables(
@@ -202,15 +264,22 @@ def _import_timetables(
     if not routes:
         return
     trips: set[str] = set()
+    headway_trips = _frequency_trips(archive, provider)
 
     def trip_rows() -> Iterator[tuple[Any, ...]]:
-        for row in _rows(archive, "trips", ("route_id", "trip_id"), provider):
-            if row["route_id"] in routes:
+        for row in _rows(archive, "trips", ("route_id", "trip_id", "service_id"), provider):
+            if row["route_id"] in routes and row["trip_id"] not in headway_trips:
                 trips.add(row["trip_id"])
-                direction = _empty_to_none(row.get("direction_id"))
-                yield snapshot, row["trip_id"], row["route_id"], direction
+                yield (
+                    snapshot,
+                    row["trip_id"],
+                    row["route_id"],
+                    _empty_to_none(row.get("direction_id")),
+                    row["service_id"],
+                    _empty_to_none(row.get("trip_headsign")),
+                )
 
-    _insert_batches(conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?)", trip_rows())
+    _insert_batches(conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?)", trip_rows())
     latest = 0
 
     def stop_time_rows() -> Iterator[tuple[Any, ...]]:
@@ -228,9 +297,14 @@ def _import_timetables(
                     row["stop_id"],
                     arrival,
                     departure,
+                    int(row.get("pickup_type") or 0),
+                    int(row.get("drop_off_type") or 0),
+                    _empty_to_none(row.get("stop_headsign")),
                 )
 
-    _insert_batches(conn, "INSERT INTO stop_times VALUES (?, ?, ?, ?, ?, ?)", stop_time_rows())
+    _insert_batches(
+        conn, "INSERT INTO stop_times VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", stop_time_rows()
+    )
     conn.execute(
         "UPDATE snapshots SET max_seconds = max(coalesce(max_seconds, 0), ?) WHERE id = ?",
         (latest, snapshot),
@@ -310,6 +384,7 @@ def _apply_archive(
         snapshot = cursor.lastrowid
         assert snapshot is not None
         _import_catalogue(conn, archive, snapshot, provider)
+        _import_services(conn, archive, snapshot, provider)
         action = "imported"
     else:
         snapshot, stored_version = row
@@ -322,6 +397,18 @@ def _apply_archive(
             action = "extended"
     conn.commit()
     return FileOutcome(snapshot, action)
+
+
+TABLES_BY_SNAPSHOT = (
+    "stop_times",
+    "trips",
+    "stops",
+    "lines",
+    "agencies",
+    "imported_lines",
+    "services",
+    "service_exceptions",
+)
 
 
 def remove_deselected(conn: sqlite3.Connection, selection: Collection[LineKey]) -> bool:
@@ -360,7 +447,7 @@ def remove_deselected(conn: sqlite3.Connection, selection: Collection[LineKey]) 
 def delete_snapshots(conn: sqlite3.Connection, snapshots: Collection[int]) -> None:
     """Delete snapshots and every row scoped to them."""
     for snapshot in snapshots:
-        for table in ("stop_times", "trips", "stops", "lines", "agencies", "imported_lines"):
+        for table in TABLES_BY_SNAPSHOT:
             conn.execute(f"DELETE FROM {table} WHERE snapshot = ?", (snapshot,))
         conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot,))
     conn.commit()

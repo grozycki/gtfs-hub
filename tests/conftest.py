@@ -61,6 +61,11 @@ def base_tables(
             "route_id,service_id,trip_id,direction_id",
             trips or [("r11", "svc", "t1", 0), ("r12", "svc", "t2", 1)],
         ),
+        "calendar": (
+            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+            "start_date,end_date",
+            [("svc", 1, 1, 1, 1, 1, 1, 1, start, end)],
+        ),
         "stop_times": (
             "trip_id,arrival_time,departure_time,stop_id,stop_sequence",
             stop_times

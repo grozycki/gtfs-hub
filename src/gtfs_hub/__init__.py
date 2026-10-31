@@ -19,6 +19,8 @@ from .generic import GenericProvider
 from .hub import GtfsHub
 from .models import (
     Capabilities,
+    Departure,
+    DepartureStatus,
     Line,
     LineKey,
     RealtimeEndpoints,
@@ -30,10 +32,13 @@ from .models import (
     SyncResult,
 )
 from .provider import BaseProvider, Provider
+from .realtime import RealtimeData
 
 __all__ = [
     "BaseProvider",
     "Capabilities",
+    "Departure",
+    "DepartureStatus",
     "GenericProvider",
     "GtfsAuthError",
     "GtfsConnectionError",
@@ -45,6 +50,7 @@ __all__ = [
     "Line",
     "LineKey",
     "Provider",
+    "RealtimeData",
     "RealtimeEndpoints",
     "ResolvedId",
     "Snapshot",

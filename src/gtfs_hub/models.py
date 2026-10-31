@@ -2,7 +2,8 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
+from enum import StrEnum
 from typing import Literal
 
 type StopKeyField = Literal["stop_id", "stop_code"]
@@ -59,6 +60,7 @@ class Line:
     agency: str | None
     color: str | None
     text_color: str | None
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ class Stop:
     code: str | None
     latitude: float | None
     longitude: float | None
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,3 +103,32 @@ class SyncResult:
     skipped: int = 0
     extended: int = 0
     removed: int = 0
+
+
+class DepartureStatus(StrEnum):
+    """How far a departure can be trusted."""
+
+    SCHEDULED = "scheduled"
+    PREDICTED = "predicted"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class Departure:
+    """One departure from a stop. Times are in UTC."""
+
+    stop_key: str
+    line: LineKey
+    headsign: str | None
+    scheduled: datetime
+    predicted: datetime | None
+    delay: int | None
+    status: DepartureStatus
+    trip_id: str
+    service_date: date
+
+    @property
+    def expected(self) -> datetime:
+        """Return the best known time."""
+        return self.predicted or self.scheduled
