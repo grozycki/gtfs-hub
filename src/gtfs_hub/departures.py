@@ -150,21 +150,26 @@ def _prediction(
     query: _Query, instance: _Instance, trip: TripUpdate, sequence: int
 ) -> tuple[bool, int | None, DepartureStatus]:
     """Return whether the stop is passed, the delay, and the status."""
-    latest: tuple[int, StopUpdate] | None = None
-    for update in trip.stops:
-        position = query.sequence_of(instance, trip.trip_id, update)
-        if (
-            position is not None
-            and position <= sequence
-            and (latest is None or position > latest[0])
-        ):
-            latest = (position, update)
-    if latest is None:
-        return bool(trip.stops), None, DepartureStatus.SCHEDULED
-    position, update = latest
-    if update.relationship is StopRelationship.SKIPPED:
-        status = DepartureStatus.SKIPPED if position == sequence else DepartureStatus.SCHEDULED
-        return False, None, status
+    placed = [
+        (position, update)
+        for update in trip.stops
+        if (position := query.sequence_of(instance, trip.trip_id, update)) is not None
+    ]
+    if not placed:
+        return False, None, DepartureStatus.SCHEDULED
+    if all(position > sequence for position, _ in placed):
+        return True, None, DepartureStatus.SCHEDULED
+    skipped = StopRelationship.SKIPPED
+    if any(position == sequence and item.relationship is skipped for position, item in placed):
+        return False, None, DepartureStatus.SKIPPED
+    earlier = [
+        (position, update)
+        for position, update in placed
+        if position <= sequence and update.relationship is not skipped
+    ]
+    if not earlier:
+        return False, None, DepartureStatus.SCHEDULED
+    position, update = max(earlier, key=lambda item: item[0])
     if update.relationship is StopRelationship.NO_DATA:
         return False, None, DepartureStatus.SCHEDULED
     if update.time is not None:

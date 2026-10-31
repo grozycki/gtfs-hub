@@ -80,6 +80,14 @@ def _stop_update(update: gtfs_realtime_pb2.TripUpdate.StopTimeUpdate) -> StopUpd
     )
 
 
+def _parse_start_date(value: str) -> date | None:
+    """Return a start date. A bad one is as good as none: one trip must not sink the feed."""
+    try:
+        return datetime.strptime(value, "%Y%m%d").date() if value else None
+    except ValueError:
+        return None
+
+
 def parse_trip_updates(body: bytes) -> RealtimeData:
     """Parse a protobuf message of trip updates. Blocks on large messages."""
     message = gtfs_realtime_pb2.FeedMessage()
@@ -94,10 +102,9 @@ def parse_trip_updates(body: bytes) -> RealtimeData:
         if not entity.HasField("trip_update") or not entity.trip_update.trip.trip_id:
             continue
         update = entity.trip_update
-        start = update.trip.start_date
         trips[update.trip.trip_id] = TripUpdate(
             trip_id=update.trip.trip_id,
-            start_date=datetime.strptime(start, "%Y%m%d").date() if start else None,
+            start_date=_parse_start_date(update.trip.start_date),
             cancelled=update.trip.schedule_relationship in cancelled,
             stops=tuple(_stop_update(stop) for stop in update.stop_time_update),
         )

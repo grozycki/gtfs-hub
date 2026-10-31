@@ -1,6 +1,7 @@
 """Read queries on the stored schedule. Everything here blocks."""
 
 import sqlite3
+from collections.abc import Collection
 from datetime import date
 
 from .models import Line, LineKey, ResolvedId, Snapshot, Stop
@@ -51,8 +52,10 @@ def search_lines(conn: sqlite3.Connection, query: str, limit: int) -> list[Line]
     return ordered[:limit]
 
 
-def search_stops(conn: sqlite3.Connection, query: str, limit: int) -> list[Stop]:
-    """Find stops by name or code, one result per key."""
+def search_stops(
+    conn: sqlite3.Connection, query: str, limit: int, only: Collection[str] | None = None
+) -> list[Stop]:
+    """Find stops by name or code, one result per key, optionally among the given keys."""
     rows = conn.execute(
         f"SELECT {_STOP_COLUMNS} FROM stops s WHERE s.search_text LIKE ? ESCAPE '\\'"
         " ORDER BY s.snapshot DESC",
@@ -60,7 +63,8 @@ def search_stops(conn: sqlite3.Connection, query: str, limit: int) -> list[Stop]
     )
     found: dict[str, Stop] = {}
     for row in rows:
-        found.setdefault(row[0], Stop(*row))
+        if only is None or row[0] in only:
+            found.setdefault(row[0], Stop(*row))
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))[:limit]
 
 

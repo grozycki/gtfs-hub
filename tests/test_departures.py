@@ -200,3 +200,25 @@ async def test_source_links(
     assert (await hub.async_search_lines("12"))[0].url is None
     assert (await hub.async_search_stops("One"))[0].url == "http://example.test/s1"
     assert (await hub.async_search_stops("Two"))[0].url is None
+
+
+async def test_arrival_only_stop_time_gives_a_departure(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    tables = base_tables(
+        stop_times=[("t1", "08:00:00", "", "s1", 0), ("t1", "08:05:00", "08:05:00", "s2", 1)]
+    )
+    hub = await make_hub(tmp_path, feed_server, session, at(2026, 11, 2, 5, 0), tables)
+    assert len(await hub.async_departures("s1", horizon=timedelta(hours=6))) == 1
+
+
+async def test_routes_without_agency_id_use_the_only_agency(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    tables = base_tables()
+    tables["routes"] = (
+        "route_id,route_short_name,route_long_name,route_type",
+        [("r11", "11", "L", 3), ("r12", "12", "L", 3)],
+    )
+    hub = await make_hub(tmp_path, feed_server, session, at(2026, 11, 2, 5, 0), tables)
+    assert (await hub.async_search_lines("11"))[0].agency == "Agency One"

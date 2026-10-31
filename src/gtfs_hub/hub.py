@@ -12,17 +12,20 @@ from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from . import catalogue, importer
 from .departures import list_departures
 from .download import async_download, raise_for_status
-from .errors import GtfsConnectionError, GtfsFeedError
+from .errors import GtfsConnectionError, GtfsError, GtfsFeedError
 from .models import Departure, Line, LineKey, ResolvedId, Snapshot, StaticFeedRef, Stop, SyncResult
 from .provider import Provider
 from .realtime import RealtimeData, parse_trip_updates
 from .schema import SCHEMA_VERSION, open_read, open_work, stored_version
 from .snapshots import is_expired, missing_dates, select_snapshot
+
+# Far below the session default, as a stalled feed must not hold up the schedule.
+_REALTIME_TIMEOUT = ClientTimeout(total=20)
 
 
 def _utc_now() -> datetime:
@@ -89,7 +92,7 @@ class GtfsHub:
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._provider = provider
-        self._path = path
+        self._path = Path(os.path.abspath(path))
         self._session = session
         self._clock = clock
         self._lock = asyncio.Lock()
@@ -109,6 +112,8 @@ class GtfsHub:
             workspace = Path(await self._run(self._make_workspace))
             try:
                 return await self._sync_in(workspace, refs, selection)
+            except (OSError, sqlite3.Error) as err:
+                raise GtfsError(f"Cannot store the schedule: {err}") from err
             finally:
                 await self._run(partial(shutil.rmtree, workspace, ignore_errors=True))
 
@@ -150,10 +155,11 @@ class GtfsHub:
             await self._run(file_path.unlink)
             listed.add(outcome.snapshot_id)
             result = _count(result, outcome.action)
-        removed = await self._run(
+        removed, lines_removed = await self._run(
             partial(self._work, work_path, partial(self._finish, listed, selection))
         )
-        await self._run(partial(_swap_in, work_path, self._path))
+        if removed or lines_removed or result.imported or result.relabelled or result.extended:
+            await self._run(partial(_swap_in, work_path, self._path))
         return replace(result, removed=removed)
 
     def _prepare(self, work_path: Path) -> None:
@@ -163,35 +169,38 @@ class GtfsHub:
 
     def _finish(
         self, listed: set[int], selection: Collection[LineKey], conn: sqlite3.Connection
-    ) -> int:
+    ) -> tuple[int, bool]:
         lines_removed = importer.remove_deselected(conn, selection)
-        rows = conn.execute(
-            "SELECT id, version, sha256, valid_from, valid_to, timezone, max_seconds FROM snapshots"
-        ).fetchall()
+        snapshots = catalogue.read_snapshots(conn)
+        details = {
+            row[0]: (row[1], row[2])
+            for row in conn.execute("SELECT id, timezone, max_seconds FROM snapshots")
+        }
         now = self._clock()
         expired = {
-            row[0]
-            for row in rows
-            if is_expired(date.fromisoformat(row[4]), row[6], _local(now, row[5]))
+            snapshot.id
+            for snapshot in snapshots
+            if is_expired(
+                snapshot.valid_to,
+                details[snapshot.id][1],
+                _local(now, details[snapshot.id][0]),
+            )
         }
-        windows = [
-            Snapshot(row[0], row[1], row[2], date.fromisoformat(row[3]), date.fromisoformat(row[4]))
-            for row in rows
-            if row[0] in listed
-        ]
+        windows = [snapshot for snapshot in snapshots if snapshot.id in listed]
         # A file gone from the listing stays until newer files cover what is left of its window.
         superseded = set()
-        for row in rows:
-            if row[0] in listed or row[0] in expired:
+        for snapshot in snapshots:
+            if snapshot.id in listed or snapshot.id in expired:
                 continue
-            start = max(date.fromisoformat(row[3]), _local(now, row[5]).date())
-            if not missing_dates(windows, start, date.fromisoformat(row[4])):
-                superseded.add(row[0])
+            start = max(snapshot.valid_from, _local(now, details[snapshot.id][0]).date())
+            # With its window over, a kept snapshot is serving night trips, so nothing replaces it.
+            if start <= snapshot.valid_to and not missing_dates(windows, start, snapshot.valid_to):
+                superseded.add(snapshot.id)
         removed = expired | superseded
         importer.delete_snapshots(conn, removed)
         if removed or lines_removed:
             conn.execute("VACUUM")
-        return len(removed)
+        return len(removed), lines_removed
 
     async def _read[T](self, job: Callable[[sqlite3.Connection], T]) -> T:
         return await self._run(partial(_with_conn, open_read, self._path, job))
@@ -206,7 +215,9 @@ class GtfsHub:
         if url is None:
             return None
         try:
-            async with self._session.get(url, headers=endpoints.headers) as response:
+            async with self._session.get(
+                url, headers=endpoints.headers, timeout=_REALTIME_TIMEOUT
+            ) as response:
                 raise_for_status(response, url)
                 body = await response.read()
         except (ClientError, TimeoutError) as err:
@@ -247,9 +258,11 @@ class GtfsHub:
         """Find lines by short or long name."""
         return await self._read(lambda conn: catalogue.search_lines(conn, query, limit))
 
-    async def async_search_stops(self, query: str, limit: int = 20) -> list[Stop]:
-        """Find stops by name or code."""
-        return await self._read(lambda conn: catalogue.search_stops(conn, query, limit))
+    async def async_search_stops(
+        self, query: str, limit: int = 20, only: Collection[str] | None = None
+    ) -> list[Stop]:
+        """Find stops by name or code, optionally among the given stop keys."""
+        return await self._read(lambda conn: catalogue.search_stops(conn, query, limit, only))
 
     async def async_resolve_line(self, key: LineKey) -> list[ResolvedId]:
         """Return the route IDs of a line. Empty means it is absent."""

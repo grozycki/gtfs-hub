@@ -132,3 +132,11 @@ async def test_empty_colour_stays_absent(
     hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
     assert (await hub.async_search_lines("12"))[0].color is None
     assert (await hub.async_search_lines("11"))[0].color == "FF0000"
+
+
+async def test_stop_search_filters_before_the_limit(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
+    found = await hub.async_search_stops("stop", limit=1, only={"s3"})
+    assert [stop.key for stop in found] == ["s3"]

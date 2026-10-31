@@ -135,15 +135,15 @@ def _line_key(row: dict[str, str]) -> LineKey:
 def _import_catalogue(
     conn: sqlite3.Connection, archive: zipfile.ZipFile, snapshot: int, provider: Provider
 ) -> None:
+    agencies: list[tuple[Any, ...]] = []
     if "agency.txt" in archive.namelist():
-        _insert_batches(
-            conn,
-            "INSERT OR REPLACE INTO agencies VALUES (?, ?, ?)",
-            (
-                (snapshot, row.get("agency_id", ""), _empty_to_none(row.get("agency_name")))
-                for row in _rows(archive, "agency", (), provider)
-            ),
-        )
+        agencies = [
+            (snapshot, row.get("agency_id", ""), _empty_to_none(row.get("agency_name")))
+            for row in _rows(archive, "agency", (), provider)
+        ]
+        conn.executemany("INSERT OR REPLACE INTO agencies VALUES (?, ?, ?)", agencies)
+    # With a single agency, routes may leave agency_id out.
+    only_agency = agencies[0][1] if len(agencies) == 1 else ""
 
     def line(row: dict[str, str]) -> tuple[Any, ...]:
         key = _line_key(row)
@@ -154,7 +154,7 @@ def _import_catalogue(
             key.route_type,
             key.short_name,
             long_name,
-            row.get("agency_id", ""),
+            row.get("agency_id") or only_agency,
             _empty_to_none(row.get("route_color")),
             _empty_to_none(row.get("route_text_color")),
             fold(f"{key.short_name} {long_name or ''}"),
@@ -288,6 +288,7 @@ def _import_timetables(
         for row in _rows(archive, "stop_times", required, provider):
             arrival = _parse_time(row["arrival_time"])
             departure = _parse_time(row["departure_time"])
+            departure = arrival if departure is None else departure
             latest = max(latest, arrival or 0, departure or 0)
             if row["trip_id"] in trips:
                 yield (

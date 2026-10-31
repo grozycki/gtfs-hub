@@ -251,3 +251,35 @@ def test_message_without_timestamp_is_stale() -> None:
 
 def test_header_timestamp_is_utc() -> None:
     assert message().timestamp == NOW
+
+
+async def test_unplaceable_update_keeps_the_departure(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session)
+    data = message({"trip": "t1", "stops": [{"stop_id": "elsewhere", "arrival": {"delay": 30}}]})
+    departure = await first(hub, data)
+    assert departure.trip_id == "t1"
+    assert departure.status is DepartureStatus.SCHEDULED
+
+
+async def test_delay_propagates_past_a_skipped_stop(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session)
+    skipped = pb.TripUpdate.StopTimeUpdate.SKIPPED
+    data = message(
+        {
+            "trip": "t1",
+            "stops": [
+                {"sequence": 3, "arrival": {"delay": 300}},
+                {"sequence": 5, "relationship": skipped},
+            ],
+        }
+    )
+    assert (await first(hub, data)).delay == 300
+
+
+def test_bad_start_date_does_not_sink_the_feed() -> None:
+    data = message({"trip": "t1", "start_date": "2026-11-02"})
+    assert data.trips["t1"].start_date is None

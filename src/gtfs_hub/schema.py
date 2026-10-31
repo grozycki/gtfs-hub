@@ -127,6 +127,12 @@ def open_work(path: Path) -> sqlite3.Connection:
 
 def open_read(path: Path) -> sqlite3.Connection:
     """Open the live database for one read job."""
-    if stored_version(path) != SCHEMA_VERSION:
+    try:
+        conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    except sqlite3.DatabaseError as err:
+        raise GtfsNoDataError(f"No usable schedule database at {path}") from err
+    if version != SCHEMA_VERSION:
+        conn.close()
         raise GtfsNoDataError(f"No usable schedule database at {path}")
-    return sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    return conn

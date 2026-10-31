@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from aiohttp import ClientSession
@@ -13,6 +14,7 @@ from gtfs_hub import (
     BaseProvider,
     GenericProvider,
     GtfsConnectionError,
+    GtfsError,
     GtfsFeedError,
     GtfsHub,
     GtfsNoDataError,
@@ -268,3 +270,61 @@ async def test_rebuild_on_missing_file(
     path.unlink()
     assert (await hub.async_sync([])).imported == 1
     assert path.exists()
+
+
+async def test_finished_window_stays_for_night_service_when_gone_from_listing(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    old = feed_server.put(
+        "o.zip", write_feed(tmp_path / "o.zip", base_tables("20261025", "20261101"))
+    )
+    new = feed_server.put(
+        "n.zip", write_feed(tmp_path / "n.zip", base_tables("20261102", "20261107"))
+    )
+    provider = Listed([StaticFeedRef(old, version="v1")])
+    clock_time = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=lambda: clock_time)
+    line = LineKey(3, "12")
+    await hub.async_sync([line])
+    provider.refs = [StaticFeedRef(new, version="v2")]
+    clock_time = datetime(2026, 11, 2, 0, 10, tzinfo=UTC)
+    assert (await hub.async_sync([line])).removed == 0
+    assert len(await hub.async_snapshots()) == 2
+
+
+async def test_unchanged_sync_leaves_the_file_alone(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    hub = GtfsHub(Listed([StaticFeedRef(url, version="v1")]), path, session, clock=now)
+    await hub.async_sync([LINE_11])
+    before = path.stat().st_ino
+    await hub.async_sync([LINE_11])
+    assert path.stat().st_ino == before
+
+
+async def test_relative_path_works(
+    tmp_path: Path,
+    feed_server: FeedServer,
+    session: ClientSession,
+    now: Callable[[], datetime],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    monkeypatch.chdir(tmp_path)
+    hub = GtfsHub(GenericProvider([url]), Path("relative.db"), session, clock=now)
+    await hub.async_sync([])
+    assert len(await hub.async_snapshots()) == 1
+
+
+async def test_storage_failure_is_a_gtfs_error(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
+    with (
+        patch("gtfs_hub.hub.importer.apply_file", side_effect=sqlite3.OperationalError("full")),
+        pytest.raises(GtfsError),
+    ):
+        await hub.async_sync([])
