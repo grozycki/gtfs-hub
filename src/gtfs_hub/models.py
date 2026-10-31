@@ -119,6 +119,16 @@ class SyncResult:
 
 
 @dataclass(frozen=True, slots=True)
+class VehicleClass:
+    """The vehicle planned for a trip. The one that comes may differ."""
+
+    name: str
+    length: int | None = None
+    units: int = 1
+    low_floor: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Vehicle:
     """A vehicle on a selected line. Optional values stay None when not sent."""
 
@@ -129,6 +139,7 @@ class Vehicle:
     latitude: float
     longitude: float
     measured: datetime | None
+    planned_class: VehicleClass | None = None
 
 
 class DepartureStatus(StrEnum):

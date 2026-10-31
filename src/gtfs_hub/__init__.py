@@ -34,9 +34,10 @@ from .models import (
     SyncResult,
     TripId,
     Vehicle,
+    VehicleClass,
     VehicleKey,
 )
-from .provider import BaseProvider, Provider
+from .provider import BaseProvider, Provider, TableReader
 from .realtime import RealtimeData
 
 __all__ = [
@@ -65,8 +66,10 @@ __all__ = [
     "StopKey",
     "StopKeyField",
     "SyncResult",
+    "TableReader",
     "TripId",
     "Vehicle",
+    "VehicleClass",
     "VehicleKey",
     "async_create_provider",
     "async_list_provider_keys",

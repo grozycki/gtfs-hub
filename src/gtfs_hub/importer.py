@@ -267,10 +267,17 @@ def _import_timetables(
     trips: set[str] = set()
     headway_trips = _frequency_trips(archive, provider)
 
+    def read_table(table: str) -> Iterator[dict[str, str]]:
+        if f"{table}.txt" in archive.namelist():
+            yield from _rows(archive, table, (), provider)
+
+    classes = provider.trip_vehicle_classes(read_table)
+
     def trip_rows() -> Iterator[SqlRow]:
         for row in _rows(archive, "trips", ("route_id", "trip_id", "service_id"), provider):
             if row["route_id"] in routes and row["trip_id"] not in headway_trips:
                 trips.add(row["trip_id"])
+                planned = classes.get(row["trip_id"])
                 yield (
                     snapshot,
                     row["trip_id"],
@@ -278,9 +285,15 @@ def _import_timetables(
                     _empty_to_none(row.get("direction_id")),
                     row["service_id"],
                     _empty_to_none(row.get("trip_headsign")),
+                    planned.name if planned else None,
+                    planned.length if planned else None,
+                    planned.units if planned else None,
+                    planned.low_floor if planned else None,
                 )
 
-    _insert_batches(conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?)", trip_rows())
+    _insert_batches(
+        conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", trip_rows()
+    )
     latest = 0
 
     def stop_time_rows() -> Iterator[SqlRow]:

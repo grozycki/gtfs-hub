@@ -3,10 +3,30 @@
 import re
 import sqlite3
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import date
 
-from .models import Line, LineKey, ResolvedId, Snapshot, Stop, StopChoice, StopKey
+from .models import (
+    Line,
+    LineKey,
+    ResolvedId,
+    Snapshot,
+    Stop,
+    StopChoice,
+    StopKey,
+    VehicleClass,
+)
 from .text import fold
+
+
+@dataclass(frozen=True, slots=True)
+class TripInfo:
+    """What a vehicle position needs of its trip."""
+
+    line: LineKey
+    headsign: str | None
+    planned_class: VehicleClass | None
+
 
 _LINE_COLUMNS = """
     l.route_type, l.short_name, l.long_name, a.name, l.color, l.text_color, l.url
@@ -171,14 +191,24 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
     )
 
 
-def trip_lines(conn: sqlite3.Connection) -> dict[str, tuple[LineKey, str | None]]:
-    """Return the line and headsign of every stored trip, the newest snapshot winning."""
+def trip_lines(conn: sqlite3.Connection) -> dict[str, TripInfo]:
+    """Return what vehicles need of every stored trip, the newest snapshot winning."""
     rows = conn.execute(
         """
-        SELECT t.trip_id, l.route_type, l.short_name, t.headsign
+        SELECT t.trip_id, l.route_type, l.short_name, t.headsign, t.vehicle_name,
+            t.vehicle_length, t.vehicle_units, t.vehicle_low_floor
         FROM trips t
         JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
         ORDER BY t.snapshot
         """
     )
-    return {row[0]: (LineKey(row[1], row[2]), row[3]) for row in rows}
+    return {
+        row[0]: TripInfo(
+            LineKey(row[1], row[2]),
+            row[3],
+            None
+            if row[4] is None
+            else VehicleClass(row[4], row[5], row[6], None if row[7] is None else bool(row[7])),
+        )
+        for row in rows
+    }

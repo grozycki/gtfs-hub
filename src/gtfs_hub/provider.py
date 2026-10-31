@@ -1,10 +1,14 @@
 """The contract between core and providers."""
 
+from collections.abc import Callable, Iterable, Mapping
 from typing import Protocol, runtime_checkable
 
 from aiohttp import ClientSession
 
-from .models import Capabilities, RealtimeEndpoints, StaticFeedRef, StopKeyField
+from .models import Capabilities, RealtimeEndpoints, StaticFeedRef, StopKeyField, VehicleClass
+
+# Reads a table by its name without .txt. An absent table gives no rows.
+type TableReader = Callable[[str], Iterable[Mapping[str, str]]]
 
 
 @runtime_checkable
@@ -52,6 +56,10 @@ class Provider(Protocol):
         """Return an identity that survives a change of trip, or None."""
         ...
 
+    def trip_vehicle_classes(self, read: TableReader) -> Mapping[str, VehicleClass]:
+        """Return the planned vehicle by trip, from any table of a file."""
+        ...
+
 
 class BaseProvider:
     """Defaults for a provider, which overrides only what it needs."""
@@ -71,3 +79,7 @@ class BaseProvider:
     def vehicle_key(self, vehicle_id: str, label: str, trip_id: str) -> str | None:
         """Return no identity: a raw vehicle ID proves nothing."""
         return None
+
+    def trip_vehicle_classes(self, read: TableReader) -> Mapping[str, VehicleClass]:
+        """Return no classes: GTFS has no such table."""
+        return {}

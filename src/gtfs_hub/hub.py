@@ -110,7 +110,7 @@ class GtfsHub:
         self._session = session
         self._clock = clock
         self._lock = asyncio.Lock()
-        self._trips: dict[str, tuple[LineKey, str | None]] | None = None
+        self._trips: dict[str, catalogue.TripInfo] | None = None
 
     @property
     def provider(self) -> Provider:
@@ -271,12 +271,13 @@ class GtfsHub:
                 vehicles.append(
                     Vehicle(
                         VehicleKey(key),
-                        trip[0],
+                        trip.line,
                         TripId(position.trip_id),
-                        trip[1],
+                        trip.headsign,
                         position.latitude,
                         position.longitude,
                         position.measured,
+                        trip.planned_class,
                     )
                 )
         return vehicles
