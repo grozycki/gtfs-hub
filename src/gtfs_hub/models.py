@@ -4,9 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, NewType
 
 type StopKeyField = Literal["stop_id", "stop_code"]
+
+StopKey = NewType("StopKey", str)
+TripId = NewType("TripId", str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +70,7 @@ class Line:
 class Stop:
     """A stop from the catalogue."""
 
-    key: str
+    key: StopKey
     name: str
     code: str | None
     latitude: float | None
@@ -118,14 +121,14 @@ class DepartureStatus(StrEnum):
 class Departure:
     """One departure from a stop. Times are in UTC."""
 
-    stop_key: str
+    stop_key: StopKey
     line: LineKey
     headsign: str | None
     scheduled: datetime
     predicted: datetime | None
     delay: int | None
     status: DepartureStatus
-    trip_id: str
+    trip_id: TripId
     service_date: date
 
     @property

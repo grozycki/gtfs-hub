@@ -1,6 +1,7 @@
 """A provider configured with plain URLs."""
 
 from collections.abc import Mapping, Sequence
+from typing import override
 
 from aiohttp import ClientSession
 
@@ -45,6 +46,7 @@ class GenericProvider(BaseProvider):
         """Return one reference per configured URL."""
         return [StaticFeedRef(url=url) for url in self._schedule_urls]
 
+    @override
     def realtime_endpoints(self) -> RealtimeEndpoints:
         """Return the configured endpoints."""
         return self._realtime

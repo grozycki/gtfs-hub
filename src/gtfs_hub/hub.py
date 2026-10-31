@@ -18,7 +18,17 @@ from . import catalogue, importer
 from .departures import list_departures
 from .download import async_download, raise_for_status
 from .errors import GtfsConnectionError, GtfsError, GtfsFeedError
-from .models import Departure, Line, LineKey, ResolvedId, Snapshot, StaticFeedRef, Stop, SyncResult
+from .models import (
+    Departure,
+    Line,
+    LineKey,
+    ResolvedId,
+    Snapshot,
+    StaticFeedRef,
+    Stop,
+    StopKey,
+    SyncResult,
+)
 from .provider import Provider
 from .realtime import RealtimeData, parse_trip_updates
 from .schema import SCHEMA_VERSION, open_read, open_work, stored_version
@@ -226,7 +236,7 @@ class GtfsHub:
 
     async def async_departures(
         self,
-        stop_key: str,
+        stop_key: StopKey,
         *,
         realtime: RealtimeData | None = None,
         limit: int = 10,
@@ -259,7 +269,7 @@ class GtfsHub:
         return await self._read(lambda conn: catalogue.search_lines(conn, query, limit))
 
     async def async_search_stops(
-        self, query: str, limit: int = 20, only: Collection[str] | None = None
+        self, query: str, limit: int = 20, only: Collection[StopKey] | None = None
     ) -> list[Stop]:
         """Find stops by name or code, optionally among the given stop keys."""
         return await self._read(lambda conn: catalogue.search_stops(conn, query, limit, only))
@@ -268,7 +278,7 @@ class GtfsHub:
         """Return the route IDs of a line. Empty means it is absent."""
         return await self._read(lambda conn: catalogue.resolve_line(conn, key))
 
-    async def async_resolve_stop(self, key: str) -> list[ResolvedId]:
+    async def async_resolve_stop(self, key: StopKey) -> list[ResolvedId]:
         """Return the stop IDs of a stop. Empty means it is absent."""
         return await self._read(lambda conn: catalogue.resolve_stop(conn, key))
 

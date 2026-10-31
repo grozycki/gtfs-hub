@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .catalogue import read_snapshots
 from .errors import GtfsNoDataError
-from .models import Departure, DepartureStatus, LineKey, Snapshot
+from .models import Departure, DepartureStatus, LineKey, Snapshot, StopKey, TripId
 from .realtime import RealtimeData, StopRelationship, StopUpdate, TripUpdate
 from .snapshots import DAY_SECONDS, select_snapshot
 
@@ -185,7 +185,7 @@ def _prediction(
 
 def list_departures(
     conn: sqlite3.Connection,
-    stop_key: str,
+    stop_key: StopKey,
     now: datetime,
     realtime: RealtimeData | None,
     max_age: timedelta,
@@ -213,7 +213,7 @@ def list_departures(
 def _departures_on(
     query: _Query,
     instance: _Instance,
-    stop_key: str,
+    stop_key: StopKey,
     realtime: RealtimeData | None,
     days: list[date],
     horizon: timedelta,
@@ -265,7 +265,7 @@ def _departures_on(
                 predicted,
                 delay,
                 status,
-                trip_id,
+                TripId(trip_id),
                 instance.day,
             )
         )

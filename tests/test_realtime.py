@@ -3,18 +3,28 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Required, TypedDict
 
 import pytest
 from aiohttp import ClientSession
 from google.transit import gtfs_realtime_pb2 as pb
 
 from conftest import FeedServer, base_tables, write_feed
-from gtfs_hub import DepartureStatus, GenericProvider, GtfsFeedError, GtfsHub, LineKey, RealtimeData
+from gtfs_hub import (
+    Departure,
+    DepartureStatus,
+    GenericProvider,
+    GtfsFeedError,
+    GtfsHub,
+    LineKey,
+    RealtimeData,
+    StopKey,
+)
 from gtfs_hub.realtime import parse_trip_updates
 
 LINE_11 = LineKey(3, "11")
 NOW = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+STOP_2 = StopKey("s2")
 TIMES = [
     ("t1", "08:00:00", "08:00:00", "s1", 3),
     ("t1", "08:10:00", "08:10:00", "s2", 7),
@@ -24,7 +34,22 @@ TIMES = [
 ]
 
 
-def message(*updates: dict[str, Any], stamp: datetime = NOW) -> RealtimeData:
+class StopSpec(TypedDict, total=False):
+    sequence: int
+    stop_id: str
+    relationship: pb.TripUpdate.StopTimeUpdate.ScheduleRelationship
+    arrival: dict[str, int]
+    departure: dict[str, int]
+
+
+class UpdateSpec(TypedDict, total=False):
+    trip: Required[str]
+    start_date: str
+    trip_relationship: pb.TripDescriptor.ScheduleRelationship
+    stops: list[StopSpec]
+
+
+def message(*updates: UpdateSpec, stamp: datetime = NOW) -> RealtimeData:
     feed = pb.FeedMessage()
     feed.header.gtfs_realtime_version = "2.0"
     feed.header.timestamp = int(stamp.timestamp())
@@ -44,10 +69,14 @@ def message(*updates: dict[str, Any], stamp: datetime = NOW) -> RealtimeData:
                 item.stop_id = stop["stop_id"]
             if "relationship" in stop:
                 item.schedule_relationship = stop["relationship"]
-            for name in ("arrival", "departure"):
-                for field, value in stop.get(name, {}).items():
-                    setattr(getattr(item, name), field, value)
+            _fill(item.arrival, stop.get("arrival", {}))
+            _fill(item.departure, stop.get("departure", {}))
     return parse_trip_updates(feed.SerializeToString())
+
+
+def _fill(event: pb.TripUpdate.StopTimeEvent, values: dict[str, int]) -> None:
+    for field, value in values.items():
+        setattr(event, field, value)
 
 
 async def make_hub(
@@ -55,16 +84,21 @@ async def make_hub(
     server: FeedServer,
     session: ClientSession,
     clock: Callable[[], datetime] = lambda: NOW,
-    **provider: Any,
+    trip_updates_url: str | None = None,
 ) -> GtfsHub:
     tables = base_tables(stop_times=TIMES)
     url = server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
-    hub = GtfsHub(GenericProvider([url], **provider), tmp_path / "db", session, clock=clock)
+    hub = GtfsHub(
+        GenericProvider([url], trip_updates_url=trip_updates_url),
+        tmp_path / "db",
+        session,
+        clock=clock,
+    )
     await hub.async_sync([LINE_11, LineKey(3, "12")])
     return hub
 
 
-async def first(hub: GtfsHub, data: RealtimeData, stop: str = "s2") -> Any:
+async def first(hub: GtfsHub, data: RealtimeData, stop: StopKey = STOP_2) -> Departure:
     return (await hub.async_departures(stop, realtime=data, horizon=timedelta(hours=4)))[0]
 
 
@@ -155,16 +189,17 @@ async def test_passed_stop_gives_no_departure(
 ) -> None:
     hub = await make_hub(tmp_path, feed_server, session)
     data = message({"trip": "t1", "stops": [{"sequence": 9, "arrival": {"delay": 0}}]})
-    departures = await hub.async_departures("s2", realtime=data, horizon=timedelta(hours=4))
+    departures = await hub.async_departures(
+        StopKey("s2"), realtime=data, horizon=timedelta(hours=4)
+    )
     assert [d.trip_id for d in departures] == ["t2"]
 
 
 async def test_late_vehicle_stays_after_its_scheduled_time(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession
 ) -> None:
-    clock = lambda: datetime(2026, 11, 2, 7, 12, tzinfo=UTC)  # noqa: E731
-    hub = await make_hub(tmp_path, feed_server, session, clock)
-    stamp = clock()
+    stamp = datetime(2026, 11, 2, 7, 12, tzinfo=UTC)
+    hub = await make_hub(tmp_path, feed_server, session, lambda: stamp)
     data = message(
         {"trip": "t1", "stops": [{"sequence": 7, "arrival": {"delay": 300}}]}, stamp=stamp
     )
@@ -208,7 +243,7 @@ async def test_nearest_service_day_gets_the_prediction(
     hub = await make_hub(tmp_path, feed_server, session)
     data = message({"trip": "t1", "stops": [{"sequence": 3, "arrival": {"delay": 60}}]})
     departures = await hub.async_departures(
-        "s2", realtime=data, horizon=timedelta(hours=30), limit=9
+        STOP_2, realtime=data, horizon=timedelta(hours=30), limit=9
     )
     today = [d for d in departures if d.trip_id == "t1" and d.service_date == date(2026, 11, 2)]
     tomorrow = [d for d in departures if d.trip_id == "t1" and d.service_date == date(2026, 11, 3)]
@@ -228,7 +263,7 @@ async def test_start_date_decides_the_service_day(
         }
     )
     departures = await hub.async_departures(
-        "s2", realtime=data, horizon=timedelta(hours=30), limit=9
+        STOP_2, realtime=data, horizon=timedelta(hours=30), limit=9
     )
     delays = {d.service_date: d.delay for d in departures if d.trip_id == "t1"}
     assert delays == {date(2026, 11, 2): None, date(2026, 11, 3): 60}

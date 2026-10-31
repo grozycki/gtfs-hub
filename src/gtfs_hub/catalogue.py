@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import Collection
 from datetime import date
 
-from .models import Line, LineKey, ResolvedId, Snapshot, Stop
+from .models import Line, LineKey, ResolvedId, Snapshot, Stop, StopKey
 from .text import fold
 
 _LINE_COLUMNS = """
@@ -53,7 +53,7 @@ def search_lines(conn: sqlite3.Connection, query: str, limit: int) -> list[Line]
 
 
 def search_stops(
-    conn: sqlite3.Connection, query: str, limit: int, only: Collection[str] | None = None
+    conn: sqlite3.Connection, query: str, limit: int, only: Collection[StopKey] | None = None
 ) -> list[Stop]:
     """Find stops by name or code, one result per key, optionally among the given keys."""
     rows = conn.execute(
@@ -61,10 +61,10 @@ def search_stops(
         " ORDER BY s.snapshot DESC",
         (_pattern(query),),
     )
-    found: dict[str, Stop] = {}
+    found: dict[StopKey, Stop] = {}
     for row in rows:
         if only is None or row[0] in only:
-            found.setdefault(row[0], Stop(*row))
+            found.setdefault(row[0], Stop(StopKey(row[0]), *row[1:]))
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))[:limit]
 
 
@@ -78,7 +78,7 @@ def resolve_line(conn: sqlite3.Connection, key: LineKey) -> list[ResolvedId]:
     return [ResolvedId(snapshot, route_id) for snapshot, route_id in rows]
 
 
-def resolve_stop(conn: sqlite3.Connection, key: str) -> list[ResolvedId]:
+def resolve_stop(conn: sqlite3.Connection, key: StopKey) -> list[ResolvedId]:
     """Return the stop IDs of a stop per snapshot. Empty when it is absent."""
     rows = conn.execute(
         "SELECT snapshot, stop_id FROM stops WHERE stop_key = ? ORDER BY snapshot, stop_id",
@@ -102,7 +102,7 @@ def stops_of_line(conn: sqlite3.Connection, key: LineKey) -> list[Stop]:
         """,
         (key.route_type, key.short_name),
     )
-    found: dict[str, Stop] = {}
+    found: dict[StopKey, Stop] = {}
     for row in rows:
-        found.setdefault(row[0], Stop(*row[:6]))
+        found.setdefault(row[0], Stop(StopKey(row[0]), *row[1:6]))
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))

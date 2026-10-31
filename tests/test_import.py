@@ -7,15 +7,16 @@ import subprocess
 import sys
 import time
 import zipfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
+from typing import override
 
 import pytest
 from aiohttp import ClientSession, ClientTimeout, web
 from aiohttp.test_utils import TestServer
 
-from conftest import FeedServer, base_tables, write_feed
+from conftest import FeedServer, Tables, base_tables, write_feed
 from gtfs_hub import (
     GenericProvider,
     GtfsAuthError,
@@ -43,9 +44,9 @@ def stop_times_of(path: Path, trip: str) -> int:
     return count(path, f"SELECT count(*) FROM stop_times WHERE trip_id = '{trip}'")
 
 
-async def serve(handler: Callable[..., object]) -> TestServer:
+async def serve(handler: Callable[[web.Request], Awaitable[web.Response]]) -> TestServer:
     app = web.Application()
-    app.router.add_get("/f", handler)  # type: ignore[arg-type]
+    app.router.add_get("/f", handler)
     server = TestServer(app)
     await server.start_server()
     return server
@@ -188,11 +189,11 @@ async def test_bad_feed_is_a_feed_error(
     feed_server: FeedServer,
     session: ClientSession,
     now: Callable[[], datetime],
-    damage: Callable[[dict[str, object]], object],
+    damage: Callable[[Tables], object],
     message: str,
 ) -> None:
     tables = base_tables()
-    damage(tables)  # type: ignore[arg-type]
+    damage(tables)
     url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
     hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
     with pytest.raises(GtfsFeedError, match=message):
@@ -298,6 +299,7 @@ async def test_slow_import_does_not_block_the_event_loop(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
     class Slow(GenericProvider):
+        @override
         def normalize_static(self, table: str, row: dict[str, str]) -> dict[str, str]:
             time.sleep(0.02)
             return row

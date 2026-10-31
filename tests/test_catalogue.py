@@ -6,8 +6,8 @@ from pathlib import Path
 
 from aiohttp import ClientSession
 
-from conftest import FeedServer, base_tables, write_feed
-from gtfs_hub import GenericProvider, GtfsHub, LineKey, ResolvedId
+from conftest import FeedServer, Tables, base_tables, write_feed
+from gtfs_hub import GenericProvider, GtfsHub, LineKey, ResolvedId, StopKey, StopKeyField
 
 
 async def make_hub(
@@ -15,14 +15,14 @@ async def make_hub(
     feed_server: FeedServer,
     session: ClientSession,
     now: Callable[[], datetime],
-    *feeds: dict[str, tuple[str, list[tuple[object, ...]]]],
-    stop_key: str = "stop_id",
+    *feeds: Tables,
+    stop_key: StopKeyField = "stop_id",
 ) -> GtfsHub:
     urls = [
         feed_server.put(f"{n}.zip", write_feed(tmp_path / f"{n}.zip", tables))
         for n, tables in enumerate(feeds)
     ]
-    provider = GenericProvider(urls, stop_key=stop_key)  # type: ignore[arg-type]
+    provider = GenericProvider(urls, stop_key=stop_key)
     hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
     await hub.async_sync([])
     return hub
@@ -57,7 +57,7 @@ async def test_stop_key_with_two_ids(
     first = base_tables("20261101", "20261103", stops=[("621", "C-X", "Stop", 50.0, 19.0)])
     second = base_tables("20261104", "20261107", stops=[("12957", "C-X", "Stop", 50.0, 19.0)])
     hub = await make_hub(tmp_path, feed_server, session, now, first, second, stop_key="stop_code")
-    assert [item.id for item in await hub.async_resolve_stop("C-X")] == ["621", "12957"]
+    assert [item.id for item in await hub.async_resolve_stop(StopKey("C-X"))] == ["621", "12957"]
     [stop] = await hub.async_search_stops("stop")
     assert stop.key == "C-X"
 
@@ -66,7 +66,7 @@ async def test_absent_keys_resolve_to_nothing(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
     hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
-    assert await hub.async_resolve_stop("gone") == []
+    assert await hub.async_resolve_stop(StopKey("gone")) == []
     assert await hub.async_resolve_line(LineKey(3, "99")) == []
 
 
@@ -77,7 +77,7 @@ async def test_stop_missing_from_one_snapshot_stays(
     weekend = base_tables("20261107", "20261108", stops=[("s1", "C-A", "Other", 50.1, 19.1)])
     hub = await make_hub(tmp_path, feed_server, session, now, weekday, weekend)
     assert await hub.async_search_stops("Gamma")
-    assert await hub.async_resolve_stop("s3")
+    assert await hub.async_resolve_stop(StopKey("s3"))
 
 
 async def test_line_search_by_number_and_long_name(
@@ -138,5 +138,5 @@ async def test_stop_search_filters_before_the_limit(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
     hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
-    found = await hub.async_search_stops("stop", limit=1, only={"s3"})
+    found = await hub.async_search_stops("stop", limit=1, only={StopKey("s3")})
     assert [stop.key for stop in found] == ["s3"]

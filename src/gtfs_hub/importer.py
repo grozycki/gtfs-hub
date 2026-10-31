@@ -10,13 +10,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import islice
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import GtfsFeedError
 from .models import LineKey, StaticFeedRef
 from .provider import Provider
 from .text import fold
+
+type SqlRow = tuple[str | int | float | None, ...]
 
 _BATCH_SIZE = 5_000
 _WEEKDAY_COLUMNS = (
@@ -61,7 +62,7 @@ def _rows(
             yield provider.normalize_static(table, row)
 
 
-def _insert_batches(conn: sqlite3.Connection, sql: str, rows: Iterable[tuple[Any, ...]]) -> None:
+def _insert_batches(conn: sqlite3.Connection, sql: str, rows: Iterable[SqlRow]) -> None:
     iterator = iter(rows)
     while batch := list(islice(iterator, _BATCH_SIZE)):
         conn.executemany(sql, batch)
@@ -135,7 +136,7 @@ def _line_key(row: dict[str, str]) -> LineKey:
 def _import_catalogue(
     conn: sqlite3.Connection, archive: zipfile.ZipFile, snapshot: int, provider: Provider
 ) -> None:
-    agencies: list[tuple[Any, ...]] = []
+    agencies: list[SqlRow] = []
     if "agency.txt" in archive.namelist():
         agencies = [
             (snapshot, row.get("agency_id", ""), _empty_to_none(row.get("agency_name")))
@@ -145,7 +146,7 @@ def _import_catalogue(
     # With a single agency, routes may leave agency_id out.
     only_agency = agencies[0][1] if len(agencies) == 1 else ""
 
-    def line(row: dict[str, str]) -> tuple[Any, ...]:
+    def line(row: dict[str, str]) -> SqlRow:
         key = _line_key(row)
         long_name = _empty_to_none(row.get("route_long_name"))
         return (
@@ -167,7 +168,7 @@ def _import_catalogue(
         (line(row) for row in _rows(archive, "routes", ("route_id", "route_type"), provider)),
     )
 
-    def stop(row: dict[str, str]) -> tuple[Any, ...]:
+    def stop(row: dict[str, str]) -> SqlRow:
         code = _empty_to_none(row.get("stop_code"))
         name = (row.get("stop_name") or "").strip()
         key = _empty_to_none(row.get(provider.stop_key)) or row["stop_id"]
@@ -266,7 +267,7 @@ def _import_timetables(
     trips: set[str] = set()
     headway_trips = _frequency_trips(archive, provider)
 
-    def trip_rows() -> Iterator[tuple[Any, ...]]:
+    def trip_rows() -> Iterator[SqlRow]:
         for row in _rows(archive, "trips", ("route_id", "trip_id", "service_id"), provider):
             if row["route_id"] in routes and row["trip_id"] not in headway_trips:
                 trips.add(row["trip_id"])
@@ -282,7 +283,7 @@ def _import_timetables(
     _insert_batches(conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?)", trip_rows())
     latest = 0
 
-    def stop_time_rows() -> Iterator[tuple[Any, ...]]:
+    def stop_time_rows() -> Iterator[SqlRow]:
         nonlocal latest
         required = ("trip_id", "stop_id", "stop_sequence", "arrival_time", "departure_time")
         for row in _rows(archive, "stop_times", required, provider):

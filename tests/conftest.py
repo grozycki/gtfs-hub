@@ -1,7 +1,7 @@
 """Hand-made feeds and a local server, so no test touches the network."""
 
 import zipfile
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +10,9 @@ import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
-Table = tuple[str, list[tuple[object, ...]]]
+type Row = tuple[object, ...]
+type Table = tuple[str, Sequence[Row]]
+type Tables = dict[str, Table]
 
 
 def write_feed(path: Path, tables: Mapping[str, Table]) -> Path:
@@ -25,11 +27,11 @@ def write_feed(path: Path, tables: Mapping[str, Table]) -> Path:
 def base_tables(
     start: str = "20261101",
     end: str = "20261107",
-    routes: list[tuple[object, ...]] | None = None,
-    stops: list[tuple[object, ...]] | None = None,
-    trips: list[tuple[object, ...]] | None = None,
-    stop_times: list[tuple[object, ...]] | None = None,
-) -> dict[str, Table]:
+    routes: Sequence[Row] | None = None,
+    stops: Sequence[Row] | None = None,
+    trips: Sequence[Row] | None = None,
+    stop_times: Sequence[Row] | None = None,
+) -> Tables:
     """Two lines, three stops: line 11 serves A and B, line 12 serves B and C."""
     return {
         "agency": (

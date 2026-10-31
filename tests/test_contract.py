@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import ClientSession
 
 from gtfs_hub import (
     BaseProvider,
@@ -35,7 +36,7 @@ class Minimal(BaseProvider):
     key = "minimal"
     name = "Minimal"
 
-    async def async_list_static_feeds(self, session: object) -> list[StaticFeedRef]:
+    async def async_list_static_feeds(self, session: ClientSession) -> list[StaticFeedRef]:
         return []
 
 
@@ -56,7 +57,7 @@ def test_models_compare_by_value_and_are_frozen() -> None:
     assert LineKey(3, "11") == LineKey(3, "11")
     assert LineKey(3, "11") != LineKey(0, "11")
     with pytest.raises(FrozenInstanceError):
-        LineKey(3, "11").short_name = "12"  # type: ignore[misc]
+        LineKey(3, "11").short_name = "12"  # type: ignore[misc]  # the assignment must fail
 
 
 def test_absent_values_stay_none() -> None:

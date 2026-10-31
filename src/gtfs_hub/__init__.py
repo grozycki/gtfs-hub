@@ -28,8 +28,10 @@ from .models import (
     Snapshot,
     StaticFeedRef,
     Stop,
+    StopKey,
     StopKeyField,
     SyncResult,
+    TripId,
 )
 from .provider import BaseProvider, Provider
 from .realtime import RealtimeData
@@ -56,8 +58,10 @@ __all__ = [
     "Snapshot",
     "StaticFeedRef",
     "Stop",
+    "StopKey",
     "StopKeyField",
     "SyncResult",
+    "TripId",
     "async_create_provider",
     "async_list_provider_keys",
     "create_provider",

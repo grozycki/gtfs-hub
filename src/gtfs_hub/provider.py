@@ -11,11 +11,30 @@ from .models import Capabilities, RealtimeEndpoints, StaticFeedRef, StopKeyField
 class Provider(Protocol):
     """A source of GTFS data."""
 
-    key: str
-    name: str
-    attribution: str | None
-    stop_key: StopKeyField
-    capabilities: Capabilities
+    @property
+    def key(self) -> str:
+        """Return the stable key that consumers store."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Return the display name."""
+        ...
+
+    @property
+    def attribution(self) -> str | None:
+        """Return the licence text consumers must show."""
+        ...
+
+    @property
+    def stop_key(self) -> StopKeyField:
+        """Return the field that identifies a stop across snapshots."""
+        ...
+
+    @property
+    def capabilities(self) -> Capabilities:
+        """Return what this source really supplies."""
+        ...
 
     async def async_list_static_feeds(self, session: ClientSession) -> list[StaticFeedRef]:
         """Return the current schedule files."""
