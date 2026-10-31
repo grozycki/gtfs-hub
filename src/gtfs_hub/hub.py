@@ -40,6 +40,13 @@ from .snapshots import is_expired, missing_dates, select_snapshot
 
 # Far below the session default, as a stalled feed must not hold up the schedule.
 _REALTIME_TIMEOUT = ClientTimeout(total=20)
+_NO_FIX = 0.001
+
+
+def _is_real_position(latitude: float, longitude: float) -> bool:
+    """Tell a position from the 0,0 feeds send when a vehicle has no GPS fix."""
+    in_range = abs(latitude) <= 90 and abs(longitude) <= 180
+    return in_range and not (abs(latitude) < _NO_FIX and abs(longitude) < _NO_FIX)
 
 
 def _utc_now() -> datetime:
@@ -267,6 +274,7 @@ class GtfsHub:
                 and key is not None
                 and position.latitude is not None
                 and position.longitude is not None
+                and _is_real_position(position.latitude, position.longitude)
             ):
                 vehicles.append(
                     Vehicle(

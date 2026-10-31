@@ -29,7 +29,7 @@ class Identified(GenericProvider):
         return vehicle_id or None
 
 
-def positions(*vehicles: tuple[str, str, bool]) -> bytes:
+def positions(*vehicles: tuple[str, str, bool], at: tuple[float, float] = (50.5, 19.5)) -> bytes:
     feed = pb.FeedMessage()
     feed.header.gtfs_realtime_version = "2.0"
     for number, (vehicle_id, trip_id, located) in enumerate(vehicles):
@@ -39,8 +39,8 @@ def positions(*vehicles: tuple[str, str, bool]) -> bytes:
         entity.vehicle.trip.trip_id = trip_id
         entity.vehicle.timestamp = 1_800_000_000
         if located:
-            entity.vehicle.position.latitude = 50.5
-            entity.vehicle.position.longitude = 19.5
+            entity.vehicle.position.latitude = at[0]
+            entity.vehicle.position.longitude = at[1]
     return feed.SerializeToString()
 
 
@@ -142,3 +142,16 @@ async def test_no_classes_by_default(
     hub = await make_hub(tmp_path, feed_server, session, now)
     [vehicle] = await hub.async_fetch_vehicles()
     assert vehicle.planned_class is None
+
+
+@pytest.mark.parametrize("at", [(0.0, 0.0), (0.0001, -0.0001), (95.0, 19.0), (50.0, 200.0)])
+async def test_placeholder_position_is_left_out(
+    tmp_path: Path,
+    feed_server: FeedServer,
+    session: ClientSession,
+    now: Callable[[], datetime],
+    at: tuple[float, float],
+) -> None:
+    feed_server.files["vp"] = positions(("v1", "t1", True), at=at)
+    hub = await make_hub(tmp_path, feed_server, session, now)
+    assert await hub.async_fetch_vehicles() == []
