@@ -136,7 +136,11 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
     for key in keys:
         rows = conn.execute(
             f"""
-            SELECT DISTINCT {_STOP_COLUMNS}, s.snapshot, st.pickup_type,
+            SELECT DISTINCT {_STOP_COLUMNS}, s.snapshot,
+                st.pickup_type != 1 AND st.stop_sequence < (
+                    SELECT max(last.stop_sequence) FROM stop_times last
+                    WHERE last.snapshot = st.snapshot AND last.trip_id = st.trip_id
+                ),
                 coalesce(st.headsign, t.headsign)
             FROM lines l
             JOIN trips t ON t.snapshot = l.snapshot AND t.route_id = l.route_id
@@ -152,7 +156,7 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
             stop_key = StopKey(row[0])
             stops.setdefault(stop_key, Stop(stop_key, *row[1:6]))
             lines.setdefault(stop_key, set()).add(key.short_name)
-            if row[7] != 1 and row[8]:
+            if row[7] and row[8]:
                 headsigns.setdefault(stop_key, set()).add(row[8])
     return sorted(
         (

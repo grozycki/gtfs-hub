@@ -197,3 +197,24 @@ async def test_stop_choices_tell_two_posts_apart(
     assert choices[StopKey("s1")].headsigns == ("North",)
     assert choices[StopKey("s2")].headsigns == ("South",)
     assert choices[StopKey("s1")].lines == ("11",)
+
+
+async def test_stop_choice_has_no_direction_where_trips_end(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables(trips=[("r11", "svc", "t1", 0)])
+    tables["trips"] = (
+        "route_id,service_id,trip_id,direction_id,trip_headsign",
+        [("r11", "svc", "t1", 0, "End")],
+    )
+    tables["stop_times"] = (
+        "trip_id,arrival_time,departure_time,stop_id,stop_sequence",
+        [("t1", "08:00:00", "08:00:00", "s1", 0), ("t1", "08:10:00", "08:10:00", "s2", 1)],
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
+    hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
+    line = LineKey(3, "11")
+    await hub.async_sync([line])
+    choices = {choice.stop.key: choice for choice in await hub.async_stop_choices([line])}
+    assert choices[StopKey("s1")].headsigns == ("End",)
+    assert choices[StopKey("s2")].headsigns == ()
