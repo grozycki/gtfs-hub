@@ -110,6 +110,7 @@ class GtfsHub:
         self._session = session
         self._clock = clock
         self._lock = asyncio.Lock()
+        self._trips: dict[str, tuple[LineKey, str | None]] | None = None
 
     @property
     def provider(self) -> Provider:
@@ -179,6 +180,7 @@ class GtfsHub:
         )
         if removed or lines_removed or result.imported or result.relabelled or result.extended:
             await self._run(partial(_swap_in, work_path, self._path))
+            self._trips = None
         return replace(result, removed=removed)
 
     def _prepare(self, work_path: Path) -> None:
@@ -253,7 +255,9 @@ class GtfsHub:
             return []
         body = await self._async_fetch_message(url)
         positions = await self._run(partial(parse_vehicle_positions, body))
-        trips = await self._read(catalogue.trip_lines)
+        if self._trips is None:
+            self._trips = await self._read(catalogue.trip_lines)
+        trips = self._trips
         vehicles = []
         for position in positions:
             trip = trips.get(position.trip_id)

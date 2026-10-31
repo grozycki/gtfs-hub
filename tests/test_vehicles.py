@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import override
+from unittest.mock import patch
 
 import pytest
 from aiohttp import ClientSession
@@ -95,3 +96,16 @@ async def test_corrupt_message(
     hub = await make_hub(tmp_path, feed_server, session, now)
     with pytest.raises(GtfsFeedError):
         await hub.async_fetch_vehicles()
+
+
+async def test_stored_trips_are_read_once_per_sync(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    feed_server.files["vp"] = positions(("v1", "t1", True), ("v2", "t2", True))
+    hub = await make_hub(tmp_path, feed_server, session, now)
+    assert len(await hub.async_fetch_vehicles()) == 1
+    with patch("gtfs_hub.hub.catalogue.trip_lines") as read:
+        await hub.async_fetch_vehicles()
+    read.assert_not_called()
+    await hub.async_sync([LINE_11, LineKey(3, "12")])
+    assert len(await hub.async_fetch_vehicles()) == 2
