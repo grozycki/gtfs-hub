@@ -26,6 +26,7 @@ from .models import (
     Snapshot,
     StaticFeedRef,
     Stop,
+    StopChoice,
     StopKey,
     SyncResult,
 )
@@ -263,6 +264,14 @@ class GtfsHub:
     async def async_missing_dates(self, start: date, end: date) -> list[date]:
         """Return the dates of a range no snapshot covers."""
         return missing_dates(await self.async_snapshots(), start, end)
+
+    async def async_list_lines(self) -> list[Line]:
+        """Return every line, in natural order."""
+        return await self._read(catalogue.list_lines)
+
+    async def async_stop_choices(self, lines: Collection[LineKey]) -> list[StopChoice]:
+        """Return the stops of stored lines, with what tells them apart."""
+        return await self._read(lambda conn: catalogue.stop_choices(conn, lines))
 
     async def async_search_lines(self, query: str, limit: int = 20) -> list[Line]:
         """Find lines by short or long name."""

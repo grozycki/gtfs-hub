@@ -140,3 +140,60 @@ async def test_stop_search_filters_before_the_limit(
     hub = await make_hub(tmp_path, feed_server, session, now, base_tables())
     found = await hub.async_search_stops("stop", limit=1, only={StopKey("s3")})
     assert [stop.key for stop in found] == ["s3"]
+
+
+async def test_lines_in_natural_order(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables(
+        routes=[
+            ("a", "a1", "10", "", 3, ""),
+            ("b", "a1", "2", "", 3, ""),
+            ("c", "a1", "A", "", 3, ""),
+            ("d", "a1", "T6", "", 0, ""),
+        ]
+    )
+    hub = await make_hub(tmp_path, feed_server, session, now, tables)
+    assert [line.key.short_name for line in await hub.async_list_lines()] == [
+        "2",
+        "10",
+        "A",
+        "T6",
+    ]
+
+
+async def test_stop_choices_tell_two_posts_apart(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables(
+        stops=[
+            ("s1", "C-1", "Same", 50.0, 19.0),
+            ("s2", "C-2", "Same", 50.0, 19.0),
+            ("s3", "C-3", "End", 50.0, 19.0),
+            ("s4", "C-4", "Technical", 50.0, 19.0),
+        ],
+        trips=[("r11", "svc", "t1", 0), ("r11", "svc", "t2", 1)],
+    )
+    tables["trips"] = (
+        "route_id,service_id,trip_id,direction_id,trip_headsign",
+        [("r11", "svc", "t1", 0, "North"), ("r11", "svc", "t2", 1, "South")],
+    )
+    tables["stop_times"] = (
+        "trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type",
+        [
+            ("t1", "08:00:00", "08:00:00", "s1", 0, 0, 0),
+            ("t1", "08:05:00", "08:05:00", "s4", 1, 1, 1),
+            ("t1", "08:10:00", "08:10:00", "s3", 2, 0, 0),
+            ("t2", "09:00:00", "09:00:00", "s2", 0, 0, 0),
+            ("t2", "09:10:00", "09:10:00", "s3", 1, 0, 0),
+        ],
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
+    hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
+    line = LineKey(3, "11")
+    await hub.async_sync([line])
+    choices = {choice.stop.key: choice for choice in await hub.async_stop_choices([line])}
+    assert set(choices) == {"s1", "s2", "s3"}
+    assert choices[StopKey("s1")].headsigns == ("North",)
+    assert choices[StopKey("s2")].headsigns == ("South",)
+    assert choices[StopKey("s1")].lines == ("11",)

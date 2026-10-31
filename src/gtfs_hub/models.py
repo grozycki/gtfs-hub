@@ -79,6 +79,15 @@ class Stop:
 
 
 @dataclass(frozen=True, slots=True)
+class StopChoice:
+    """A stop offered for selection, with what tells it from others of the same name."""
+
+    stop: Stop
+    lines: tuple[str, ...]
+    headsigns: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """One imported schedule file."""
 

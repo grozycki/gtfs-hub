@@ -1,10 +1,11 @@
 """Read queries on the stored schedule. Everything here blocks."""
 
+import re
 import sqlite3
 from collections.abc import Collection
 from datetime import date
 
-from .models import Line, LineKey, ResolvedId, Snapshot, Stop, StopKey
+from .models import Line, LineKey, ResolvedId, Snapshot, Stop, StopChoice, StopKey
 from .text import fold
 
 _LINE_COLUMNS = """
@@ -33,6 +34,25 @@ def read_snapshots(conn: sqlite3.Connection) -> list[Snapshot]:
         Snapshot(id_, version, sha, date.fromisoformat(start), date.fromisoformat(end))
         for id_, version, sha, start, end in rows
     ]
+
+
+def natural_key(text: str) -> list[tuple[int, int, str]]:
+    """Return a sort key that puts 2 before 10."""
+    return [
+        (0, int(part), "") if part.isdecimal() else (1, 0, part)
+        for part in re.split(r"(\d+)", fold(text))
+        if part
+    ]
+
+
+def list_lines(conn: sqlite3.Connection) -> list[Line]:
+    """Return every line once, in natural order of short names."""
+    rows = conn.execute(f"SELECT {_LINE_COLUMNS} ORDER BY l.snapshot DESC")
+    found: dict[LineKey, Line] = {}
+    for row in rows:
+        line = _line(row)
+        found.setdefault(line.key, line)
+    return sorted(found.values(), key=lambda line: natural_key(line.key.short_name))
 
 
 def search_lines(conn: sqlite3.Connection, query: str, limit: int) -> list[Line]:
@@ -106,3 +126,42 @@ def stops_of_line(conn: sqlite3.Connection, key: LineKey) -> list[Stop]:
     for row in rows:
         found.setdefault(row[0], Stop(StopKey(row[0]), *row[1:6]))
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))
+
+
+def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[StopChoice]:
+    """Return the passenger stops of stored lines, with their lines and headsigns."""
+    stops: dict[StopKey, Stop] = {}
+    lines: dict[StopKey, set[str]] = {}
+    headsigns: dict[StopKey, set[str]] = {}
+    for key in keys:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT {_STOP_COLUMNS}, s.snapshot, st.pickup_type,
+                coalesce(st.headsign, t.headsign)
+            FROM lines l
+            JOIN trips t ON t.snapshot = l.snapshot AND t.route_id = l.route_id
+            JOIN stop_times st ON st.snapshot = t.snapshot AND st.trip_id = t.trip_id
+            JOIN stops s ON s.snapshot = st.snapshot AND s.stop_id = st.stop_id
+            WHERE l.route_type = ? AND l.short_name = ?
+                AND NOT (st.pickup_type = 1 AND st.drop_off_type = 1)
+            ORDER BY s.snapshot DESC
+            """,
+            (key.route_type, key.short_name),
+        )
+        for row in rows:
+            stop_key = StopKey(row[0])
+            stops.setdefault(stop_key, Stop(stop_key, *row[1:6]))
+            lines.setdefault(stop_key, set()).add(key.short_name)
+            if row[7] != 1 and row[8]:
+                headsigns.setdefault(stop_key, set()).add(row[8])
+    return sorted(
+        (
+            StopChoice(
+                stop,
+                tuple(sorted(lines[key], key=natural_key)),
+                tuple(sorted(headsigns.get(key, ()))),
+            )
+            for key, stop in stops.items()
+        ),
+        key=lambda choice: (fold(choice.stop.name), choice.headsigns, choice.stop.key),
+    )
