@@ -1,6 +1,7 @@
 """Import schedule files into a working database. Everything here blocks."""
 
 import csv
+import hashlib
 import io
 import logging
 import sqlite3
@@ -111,6 +112,19 @@ def _read_window(archive: zipfile.ZipFile, provider: Provider) -> tuple[date, da
     if not starts:
         raise GtfsFeedError("The file states no validity window")
     return min(starts), max(ends)
+
+
+def _fingerprint(archive: zipfile.ZipFile, valid_from: date, valid_to: date) -> str:
+    """Identify the content of a file, read from the ZIP directory with nothing unpacked.
+
+    The whole file will not do: publishers rebuild it daily with a new date in feed_info.txt.
+    """
+    members = sorted(
+        (info.filename, info.CRC, info.file_size)
+        for info in archive.infolist()
+        if info.filename != "feed_info.txt"
+    )
+    return hashlib.sha256(repr((valid_from, valid_to, members)).encode()).hexdigest()
 
 
 def _read_timezone(archive: zipfile.ZipFile, provider: Provider) -> str | None:
@@ -349,14 +363,13 @@ def apply_file(
     conn: sqlite3.Connection,
     ref: StaticFeedRef,
     path: Path,
-    sha256: str,
     selection: Collection[LineKey],
     provider: Provider,
 ) -> FileOutcome:
     """Import a downloaded file, doing only what the stored data lacks."""
     try:
         with zipfile.ZipFile(path) as archive:
-            return _apply_archive(conn, ref, archive, sha256, selection, provider)
+            return _apply_archive(conn, ref, archive, selection, provider)
     except (
         zipfile.BadZipFile,
         csv.Error,
@@ -371,26 +384,26 @@ def _apply_archive(
     conn: sqlite3.Connection,
     ref: StaticFeedRef,
     archive: zipfile.ZipFile,
-    sha256: str,
     selection: Collection[LineKey],
     provider: Provider,
 ) -> FileOutcome:
+    window = None
+    if ref.valid_from is None or ref.valid_to is None:
+        window = _read_window(archive, provider)
+    valid_from = ref.valid_from or (window[0] if window else None)
+    valid_to = ref.valid_to or (window[1] if window else None)
+    assert valid_from is not None and valid_to is not None
+    fingerprint = _fingerprint(archive, valid_from, valid_to)
     row = conn.execute(
-        "SELECT id, version FROM snapshots WHERE sha256 = ? ORDER BY id DESC", (sha256,)
+        "SELECT id, version FROM snapshots WHERE fingerprint = ? ORDER BY id DESC", (fingerprint,)
     ).fetchone()
     if row is None:
-        window = None
-        if ref.valid_from is None or ref.valid_to is None:
-            window = _read_window(archive, provider)
-        valid_from = ref.valid_from or (window[0] if window else None)
-        valid_to = ref.valid_to or (window[1] if window else None)
-        assert valid_from is not None and valid_to is not None
         cursor = conn.execute(
-            "INSERT INTO snapshots (version, sha256, valid_from, valid_to, timezone)"
+            "INSERT INTO snapshots (version, fingerprint, valid_from, valid_to, timezone)"
             " VALUES (?, ?, ?, ?, ?)",
             (
                 ref.version,
-                sha256,
+                fingerprint,
                 valid_from.isoformat(),
                 valid_to.isoformat(),
                 _read_timezone(archive, provider),

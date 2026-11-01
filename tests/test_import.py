@@ -1,7 +1,6 @@
 """Layered import: downloads, selection, atomic replacement, bounded work."""
 
 import asyncio
-import hashlib
 import sqlite3
 import subprocess
 import sys
@@ -52,15 +51,14 @@ async def serve(handler: Callable[[web.Request], Awaitable[web.Response]]) -> Te
     return server
 
 
-async def test_large_download_keeps_content_and_hash(
+async def test_large_download_keeps_content(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession
 ) -> None:
     body = b"x" * (3 * 1024 * 1024 + 7)
     feed_server.files["big"] = body
     target = tmp_path / "big"
-    digest = await async_download(session, feed_server.url("big"), target)
+    await async_download(session, feed_server.url("big"), target)
     assert target.read_bytes() == body
-    assert digest == hashlib.sha256(body).hexdigest()
 
 
 async def test_download_timeout_is_a_connection_error(
@@ -331,7 +329,7 @@ from gtfs_hub.schema import open_work
 
 conn = open_work(Path(sys.argv[2]))
 ref = StaticFeedRef("file", "v", date(2026, 11, 1), date(2026, 11, 7))
-apply_file(conn, ref, Path(sys.argv[1]), "sha", [LineKey(3, "11")], GenericProvider(["x"]))
+apply_file(conn, ref, Path(sys.argv[1]), [LineKey(3, "11")], GenericProvider(["x"]))
 print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 """
 

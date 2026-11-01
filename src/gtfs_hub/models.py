@@ -94,7 +94,7 @@ class Snapshot:
 
     id: int
     version: str | None
-    sha256: str
+    fingerprint: str
     valid_from: date
     valid_to: date
 

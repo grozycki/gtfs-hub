@@ -163,7 +163,7 @@ async def test_matching_version_is_not_downloaded(
     assert feed_server.total_hits() == 1
 
 
-async def test_matching_hash_under_a_new_version_is_not_imported(
+async def test_same_content_under_a_new_version_is_not_imported(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
     feed = write_feed(tmp_path / "a.zip", base_tables())
@@ -328,3 +328,49 @@ async def test_storage_failure_is_a_gtfs_error(
         pytest.raises(GtfsError),
     ):
         await hub.async_sync([])
+
+
+async def test_rebuilt_file_with_a_new_feed_version_is_not_imported(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables()
+    header, rows = tables["feed_info"]
+    versioned = (f"{header},feed_version", [(*rows[0], "day-1")])
+    first = write_feed(tmp_path / "1.zip", {**tables, "feed_info": versioned})
+    provider = Listed([StaticFeedRef(feed_server.put("1.zip", first), version="v1")])
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
+    await hub.async_sync([LINE_11])
+    second = write_feed(
+        tmp_path / "2.zip",
+        {**tables, "feed_info": (f"{header},feed_version", [(*rows[0], "day-2")])},
+    )
+    provider.refs = [StaticFeedRef(feed_server.put("2.zip", second), version="v2")]
+    result = await hub.async_sync([LINE_11])
+    assert (result.imported, result.relabelled) == (0, 1)
+
+
+async def test_changed_timetable_is_imported(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    first = write_feed(tmp_path / "1.zip", base_tables())
+    provider = Listed([StaticFeedRef(feed_server.put("1.zip", first), version="v1")])
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
+    await hub.async_sync([LINE_11])
+    changed = base_tables(stop_times=[("t1", "09:00:00", "09:00:00", "s1", 0)])
+    second = write_feed(tmp_path / "2.zip", changed)
+    provider.refs = [StaticFeedRef(feed_server.put("2.zip", second), version="v2")]
+    assert (await hub.async_sync([LINE_11])).imported == 1
+
+
+async def test_same_content_with_a_narrower_window_is_imported(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    first = write_feed(tmp_path / "1.zip", base_tables("20261101", "20261107"))
+    provider = Listed([StaticFeedRef(feed_server.put("1.zip", first), version="v1")])
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
+    await hub.async_sync([])
+    tables = base_tables("20261101", "20261103")
+    tables["calendar"] = base_tables("20261101", "20261107")["calendar"]
+    second = write_feed(tmp_path / "2.zip", tables)
+    provider.refs = [StaticFeedRef(feed_server.put("2.zip", second), version="v2")]
+    assert (await hub.async_sync([])).imported == 1

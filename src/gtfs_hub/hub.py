@@ -171,12 +171,12 @@ class GtfsHub:
                 result = replace(result, skipped=result.skipped + 1)
                 continue
             file_path = workspace / f"{number}.zip"
-            sha256 = await async_download(self._session, ref.url, file_path)
+            await async_download(self._session, ref.url, file_path)
             outcome = await self._run(
                 partial(
                     self._work,
                     work_path,
-                    partial(_apply, ref, file_path, sha256, selection, self._provider),
+                    partial(_apply, ref, file_path, selection, self._provider),
                 )
             )
             await self._run(file_path.unlink)
@@ -360,9 +360,8 @@ def _needs_download(
 def _apply(
     ref: StaticFeedRef,
     path: Path,
-    sha256: str,
     selection: Collection[LineKey],
     provider: Provider,
     conn: sqlite3.Connection,
 ) -> importer.FileOutcome:
-    return importer.apply_file(conn, ref, path, sha256, selection, provider)
+    return importer.apply_file(conn, ref, path, selection, provider)

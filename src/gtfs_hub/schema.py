@@ -5,13 +5,13 @@ from pathlib import Path
 
 from .errors import GtfsNoDataError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     version TEXT,
-    sha256 TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
     valid_from TEXT NOT NULL,
     valid_to TEXT NOT NULL,
     timezone TEXT,

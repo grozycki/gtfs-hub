@@ -48,7 +48,7 @@ def _line(row: tuple[int, str, str | None, str | None, str | None, str | None, s
 def read_snapshots(conn: sqlite3.Connection) -> list[Snapshot]:
     """Return all stored snapshots, oldest first."""
     rows = conn.execute(
-        "SELECT id, version, sha256, valid_from, valid_to FROM snapshots ORDER BY id"
+        "SELECT id, version, fingerprint, valid_from, valid_to FROM snapshots ORDER BY id"
     )
     return [
         Snapshot(id_, version, sha, date.fromisoformat(start), date.fromisoformat(end))

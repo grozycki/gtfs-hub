@@ -1,7 +1,6 @@
 """Download schedule files to disk in chunks."""
 
 import asyncio
-import hashlib
 from pathlib import Path
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
@@ -30,19 +29,16 @@ def raise_for_status(response: ClientResponse, url: str) -> None:
 
 async def async_download(
     session: ClientSession, url: str, destination: Path, timeout: ClientTimeout = _TIMEOUT
-) -> str:
-    """Stream a URL into a file and return its SHA-256."""
+) -> None:
+    """Stream a URL into a file."""
     loop = asyncio.get_running_loop()
-    digest = hashlib.sha256()
     target = await loop.run_in_executor(None, destination.open, "wb")
     try:
         async with session.get(url, timeout=timeout) as response:
             raise_for_status(response, url)
             async for chunk in response.content.iter_chunked(_CHUNK_SIZE):
-                digest.update(chunk)
                 await loop.run_in_executor(None, target.write, chunk)
     except (ClientError, TimeoutError) as err:
         raise GtfsConnectionError(f"Cannot fetch {url}: {err}") from err
     finally:
         await loop.run_in_executor(None, target.close)
-    return digest.hexdigest()
