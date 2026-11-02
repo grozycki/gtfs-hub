@@ -56,6 +56,10 @@ class Provider(Protocol):
         """Return an identity that survives a change of trip, or None."""
         ...
 
+    def vehicle_label(self, vehicle_id: str, label: str) -> str | None:
+        """Return the fleet number riders see, or None."""
+        ...
+
     def trip_vehicle_classes(self, read: TableReader) -> Mapping[str, VehicleClass]:
         """Return the planned vehicle by trip, from any table of a file."""
         ...
@@ -79,6 +83,10 @@ class BaseProvider:
     def vehicle_key(self, vehicle_id: str, label: str, trip_id: str) -> str | None:
         """Return no identity: a raw vehicle ID proves nothing."""
         return None
+
+    def vehicle_label(self, vehicle_id: str, label: str) -> str | None:
+        """Return the feed's label, which GTFS Realtime defines as visible to riders."""
+        return label or None
 
     def trip_vehicle_classes(self, read: TableReader) -> Mapping[str, VehicleClass]:
         """Return no classes: GTFS has no such table."""

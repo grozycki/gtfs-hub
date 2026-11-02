@@ -73,6 +73,8 @@ def test_base_provider_defaults() -> None:
     row = {"stop_id": " raw "}
     assert provider.normalize_static("stops", row) == {"stop_id": " raw "}
     assert provider.vehicle_key("vehicle-1", "label", "trip") is None
+    assert provider.vehicle_label("vehicle-1", "1347") == "1347"
+    assert provider.vehicle_label("vehicle-1", "") is None
     assert provider.realtime_endpoints().alerts is None
     assert provider.stop_key == "stop_id"
 

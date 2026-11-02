@@ -140,6 +140,8 @@ class Vehicle:
     longitude: float
     measured: datetime | None
     planned_class: VehicleClass | None = None
+    # The number riders see on the vehicle, which the provider may derive.
+    label: str | None = None
 
 
 class DepartureStatus(StrEnum):

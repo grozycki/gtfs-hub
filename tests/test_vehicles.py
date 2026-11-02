@@ -71,6 +71,22 @@ async def test_selected_line_only(
     assert vehicle.line == LINE_11
     assert vehicle.latitude == pytest.approx(50.5)
     assert vehicle.measured == datetime.fromtimestamp(1_800_000_000, UTC)
+    assert vehicle.label is None
+
+
+class Numbered(Identified):
+    @override
+    def vehicle_label(self, vehicle_id: str, label: str) -> str | None:
+        return vehicle_id.removeprefix("v")
+
+
+async def test_provider_supplies_the_fleet_number(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    feed_server.files["vp"] = positions(("v1347", "t1", True))
+    hub = await make_hub(tmp_path, feed_server, session, now, Numbered)
+    [vehicle] = await hub.async_fetch_vehicles()
+    assert vehicle.label == "1347"
 
 
 async def test_no_key_or_position_is_left_out(

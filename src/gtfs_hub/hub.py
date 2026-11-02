@@ -286,6 +286,7 @@ class GtfsHub:
                         position.longitude,
                         position.measured,
                         trip.planned_class,
+                        self._provider.vehicle_label(position.vehicle_id, position.label),
                     )
                 )
         return vehicles
