@@ -19,6 +19,7 @@ from gtfs_hub import (
     LineKey,
     RealtimeData,
     StopKey,
+    TripId,
 )
 from gtfs_hub.realtime import parse_trip_updates
 
@@ -317,3 +318,68 @@ async def test_delay_propagates_past_a_skipped_stop(
 def test_bad_start_date_does_not_sink_the_feed() -> None:
     data = message({"trip": "t1", "start_date": "2026-11-02"})
     assert data.trips["t1"].start_date is None
+
+
+async def test_trip_delays_of_stored_lines(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session)
+    data = message(
+        {
+            "trip": "t1",
+            "start_date": "20261102",
+            "stops": [{"sequence": 7, "departure": {"delay": 240}}],
+        },
+        {"trip": "t2", "stops": [{"sequence": 0, "departure": {"delay": 30}}]},
+        {"trip": "elsewhere", "stops": [{"sequence": 0, "departure": {"delay": 60}}]},
+    )
+    delays = {item.trip_id: item for item in await hub.async_trip_delays(data)}
+    assert set(delays) == {"t1", "t2"}
+    first = delays[TripId("t1")]
+    assert (first.line, first.delay, first.cancelled) == (LINE_11, 240, False)
+    assert first.start_date == date(2026, 11, 2)
+
+
+async def test_trip_delays_leave_out_unstored_lines(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables(stop_times=TIMES)))
+    hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=lambda: NOW)
+    await hub.async_sync([LINE_11])
+    data = message({"trip": "t2", "stops": [{"sequence": 0, "departure": {"delay": 30}}]})
+    assert await hub.async_trip_delays(data) == []
+
+
+async def test_trip_delay_skips_skipped_stops_and_may_be_absent(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session)
+    skipped = pb.TripUpdate.StopTimeUpdate.SKIPPED
+    data = message(
+        {
+            "trip": "t1",
+            "stops": [
+                {"sequence": 3, "relationship": skipped, "departure": {"delay": 999}},
+                {"sequence": 7, "departure": {"delay": 60}},
+            ],
+        },
+        {"trip": "t2", "stops": [{"sequence": 0}]},
+    )
+    delays = {item.trip_id: item.delay for item in await hub.async_trip_delays(data)}
+    assert delays == {"t1": 60, "t2": None}
+
+
+async def test_cancelled_trip_has_no_delay(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession
+) -> None:
+    hub = await make_hub(tmp_path, feed_server, session)
+    data = message(
+        {
+            "trip": "t1",
+            "trip_relationship": pb.TripDescriptor.CANCELED,
+            "stops": [{"sequence": 7, "departure": {"delay": 120}}],
+        }
+    )
+    [item] = await hub.async_trip_delays(data)
+    assert item.cancelled
+    assert item.delay is None

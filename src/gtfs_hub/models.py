@@ -144,6 +144,19 @@ class Vehicle:
     label: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TripDelay:
+    """The live state of one trip of a stored line."""
+
+    trip_id: TripId
+    start_date: date | None
+    line: LineKey
+    headsign: str | None
+    # Seconds, from the first stop update that states one. None when no update does.
+    delay: int | None
+    cancelled: bool
+
+
 class DepartureStatus(StrEnum):
     """How far a departure can be trusted."""
 

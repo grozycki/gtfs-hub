@@ -29,12 +29,19 @@ from .models import (
     StopChoice,
     StopKey,
     SyncResult,
+    TripDelay,
     TripId,
     Vehicle,
     VehicleKey,
 )
 from .provider import Provider
-from .realtime import RealtimeData, parse_trip_updates, parse_vehicle_positions
+from .realtime import (
+    RealtimeData,
+    StopRelationship,
+    TripUpdate,
+    parse_trip_updates,
+    parse_vehicle_positions,
+)
 from .schema import SCHEMA_VERSION, open_read, open_work, stored_version
 from .snapshots import is_expired, missing_dates, select_snapshot
 
@@ -47,6 +54,20 @@ def _is_real_position(latitude: float, longitude: float) -> bool:
     """Tell a position from the 0,0 feeds send when a vehicle has no GPS fix."""
     in_range = abs(latitude) <= 90 and abs(longitude) <= 180
     return in_range and not (abs(latitude) < _NO_FIX and abs(longitude) < _NO_FIX)
+
+
+def _trip_delay(update: TripUpdate) -> int | None:
+    """Return the delay of the first stop update that states one, as feeds list from the next."""
+    if update.cancelled:
+        return None
+    return next(
+        (
+            stop.delay
+            for stop in update.stops
+            if stop.delay is not None and stop.relationship != StopRelationship.SKIPPED
+        ),
+        None,
+    )
 
 
 def _utc_now() -> datetime:
@@ -255,6 +276,28 @@ class GtfsHub:
         body = await self._async_fetch_message(url)
         return await self._run(partial(parse_trip_updates, body))
 
+    async def _async_trips(self) -> dict[str, catalogue.TripInfo]:
+        """Return stored trips by ID, read once per sync."""
+        if self._trips is None:
+            self._trips = await self._read(catalogue.trip_lines)
+        return self._trips
+
+    async def async_trip_delays(self, realtime: RealtimeData) -> list[TripDelay]:
+        """Return the live state of each trip in a message, for stored lines only."""
+        trips = await self._async_trips()
+        return [
+            TripDelay(
+                TripId(update.trip_id),
+                update.start_date,
+                trip.line,
+                trip.headsign,
+                _trip_delay(update),
+                update.cancelled,
+            )
+            for update in realtime.trips.values()
+            if (trip := trips.get(update.trip_id)) is not None
+        ]
+
     async def async_fetch_vehicles(self) -> list[Vehicle]:
         """Fetch vehicles of the stored lines. Those the provider cannot identify are left out."""
         url = self._provider.realtime_endpoints().vehicle_positions
@@ -262,9 +305,7 @@ class GtfsHub:
             return []
         body = await self._async_fetch_message(url)
         positions = await self._run(partial(parse_vehicle_positions, body))
-        if self._trips is None:
-            self._trips = await self._read(catalogue.trip_lines)
-        trips = self._trips
+        trips = await self._async_trips()
         vehicles = []
         for position in positions:
             trip = trips.get(position.trip_id)
