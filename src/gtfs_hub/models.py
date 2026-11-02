@@ -126,6 +126,8 @@ class VehicleClass:
     length: int | None = None
     units: int = 1
     low_floor: bool | None = None
+    # What the source calls it, in its own language, such as "Autobus niskopodłogowy".
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

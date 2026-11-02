@@ -137,9 +137,10 @@ async def test_stored_trips_are_read_once_per_sync(
 class WithClasses(Identified):
     @override
     def trip_vehicle_classes(self, read: TableReader) -> Mapping[str, VehicleClass]:
-        return {row["trip_id"]: VehicleClass("B N", 12, 1, True) for row in read("trips")} | {
-            row["id"]: VehicleClass("x") for row in read("absent")
-        }
+        return {
+            row["trip_id"]: VehicleClass("B N", 12, 1, True, "Autobus niskopodłogowy")
+            for row in read("trips")
+        } | {row["id"]: VehicleClass("x") for row in read("absent")}
 
 
 async def test_planned_class_reaches_the_vehicle(
@@ -148,7 +149,7 @@ async def test_planned_class_reaches_the_vehicle(
     feed_server.files["vp"] = positions(("v1", "t1", True))
     hub = await make_hub(tmp_path, feed_server, session, now, WithClasses)
     [vehicle] = await hub.async_fetch_vehicles()
-    assert vehicle.planned_class == VehicleClass("B N", 12, 1, True)
+    assert vehicle.planned_class == VehicleClass("B N", 12, 1, True, "Autobus niskopodłogowy")
 
 
 async def test_no_classes_by_default(

@@ -303,10 +303,11 @@ def _import_timetables(
                     planned.length if planned else None,
                     planned.units if planned else None,
                     planned.low_floor if planned else None,
+                    planned.description if planned else None,
                 )
 
     _insert_batches(
-        conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", trip_rows()
+        conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", trip_rows()
     )
     latest = 0
 

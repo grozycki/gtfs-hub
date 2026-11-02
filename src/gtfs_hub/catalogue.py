@@ -196,7 +196,7 @@ def trip_lines(conn: sqlite3.Connection) -> dict[str, TripInfo]:
     rows = conn.execute(
         """
         SELECT t.trip_id, l.route_type, l.short_name, t.headsign, t.vehicle_name,
-            t.vehicle_length, t.vehicle_units, t.vehicle_low_floor
+            t.vehicle_length, t.vehicle_units, t.vehicle_low_floor, t.vehicle_description
         FROM trips t
         JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
         ORDER BY t.snapshot
@@ -208,7 +208,9 @@ def trip_lines(conn: sqlite3.Connection) -> dict[str, TripInfo]:
             row[3],
             None
             if row[4] is None
-            else VehicleClass(row[4], row[5], row[6], None if row[7] is None else bool(row[7])),
+            else VehicleClass(
+                row[4], row[5], row[6], None if row[7] is None else bool(row[7]), row[8]
+            ),
         )
         for row in rows
     }
