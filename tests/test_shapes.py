@@ -2,7 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -263,3 +263,52 @@ def test_the_nearer_pass_ahead_wins_over_the_first() -> None:
     found = locate(path, 50.0004, 19.0025, after=10)
     assert found is not None
     assert found.bearing == pytest.approx(270, abs=0.5)
+
+
+async def test_unreadable_points_cost_only_those_points(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = shaped(PATHS)
+    tables["shapes"] = (SHAPE_HEADER, [*tables["shapes"][1], ("east", "", "", 99)])
+    hub = await synced(tmp_path, feed_server, session, now, tables, [LINE_11])
+    east = [shape for shape in await hub.async_line_shapes(LINE_11) if shape.id == "east"]
+    assert east[0].points == tuple(EAST)
+    assert count(tmp_path / "db", "SELECT count(*) FROM stop_times WHERE trip_id = 't1'") == 2
+
+
+async def test_shapes_without_needed_columns_leave_timetables(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = shaped(PATHS)
+    tables["shapes"] = ("shape_id,shape_pt_lat,shape_pt_lon", [("east", 50.0, 19.0)])
+    hub = await synced(tmp_path, feed_server, session, now, tables, [LINE_11])
+    assert await hub.async_line_shapes(LINE_11) == []
+    assert count(tmp_path / "db", "SELECT count(*) FROM stop_times WHERE trip_id = 't1'") == 2
+
+
+async def test_service_date_keeps_only_its_snapshot(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    moved = [(lat + 0.001, lon) for lat, lon in EAST]
+    first = shaped(PATHS)
+    second = shaped({"east2": moved}, [("r11", "svc", "t1", 0, "east2", "Beta")], start="20261103")
+    a = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", first))
+    b = feed_server.put("b.zip", write_feed(tmp_path / "b.zip", second))
+    hub = GtfsHub(GenericProvider([a, b]), tmp_path / "db", session, clock=now)
+    await hub.async_sync([LINE_11])
+    assert len(await hub.async_line_shapes(LINE_11)) == 3
+    today = await hub.async_line_shapes(LINE_11, date(2026, 11, 3))
+    assert [shape.id for shape in today] == ["east2"]
+    assert await hub.async_line_shapes(LINE_11, date(2027, 1, 1)) == []
+
+
+def test_turn_back_within_reach_is_its_own_pass() -> None:
+    # East to a stop, then straight back west along the same street.
+    path = shape([*EAST, *EAST[-2::-1]])
+    assert locate(path, 50.0, 19.0045) is None
+    back = locate(path, 50.0, 19.0045, after=400)
+    assert back is not None
+    assert back.bearing == pytest.approx(270, abs=0.5)
+    going = locate(path, 50.0, 19.0045, after=300)
+    assert going is not None
+    assert going.bearing == pytest.approx(90, abs=0.5)

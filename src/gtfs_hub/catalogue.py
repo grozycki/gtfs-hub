@@ -194,13 +194,21 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
     )
 
 
-def _read_shapes(conn: sqlite3.Connection, key: LineKey | None) -> dict[tuple[int, str], Shape]:
-    """Read stored shapes by snapshot and ID, of one line or of all.
+def _read_shapes(
+    conn: sqlite3.Connection, key: LineKey | None, snapshot: int | None = None
+) -> dict[tuple[int, str], Shape]:
+    """Read stored shapes by snapshot and ID, of one line or of all, in one snapshot or all.
 
     Each takes the line, headsign and direction most of its trips state.
     """
-    line_filter = "" if key is None else "AND l.route_type = ? AND l.short_name = ?"
-    params = () if key is None else (key.route_type, key.short_name)
+    line_filter = ""
+    params: tuple[int | str, ...] = ()
+    if key is not None:
+        line_filter += " AND l.route_type = ? AND l.short_name = ?"
+        params += (key.route_type, key.short_name)
+    if snapshot is not None:
+        line_filter += " AND t.snapshot = ?"
+        params += (snapshot,)
     counts: dict[tuple[int, str], dict[tuple[int, str, str | None, int | None], int]] = {}
     for snapshot, shape_id, route_type, short_name, headsign, direction, trips in conn.execute(
         f"""
@@ -240,10 +248,10 @@ def _read_shapes(conn: sqlite3.Connection, key: LineKey | None) -> dict[tuple[in
     return shapes
 
 
-def line_shapes(conn: sqlite3.Connection, key: LineKey) -> list[Shape]:
+def line_shapes(conn: sqlite3.Connection, key: LineKey, snapshot: int | None = None) -> list[Shape]:
     """Return each distinct path of a stored line, the newest snapshot winning an ID."""
     by_id: dict[str, Shape] = {}
-    for (_, shape_id), shape in sorted(_read_shapes(conn, key).items(), reverse=True):
+    for (_, shape_id), shape in sorted(_read_shapes(conn, key, snapshot).items(), reverse=True):
         by_id.setdefault(shape_id, shape)
     distinct: dict[tuple[tuple[float, float], ...], Shape] = {}
     for shape in by_id.values():

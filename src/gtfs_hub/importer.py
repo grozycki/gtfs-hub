@@ -363,21 +363,33 @@ def _import_shapes(
     if not wanted:
         return
     required = ("shape_id", "shape_pt_lat", "shape_pt_lon", "shape_pt_sequence")
-    _insert_batches(
-        conn,
-        "INSERT OR REPLACE INTO shape_points VALUES (?, ?, ?, ?, ?)",
-        (
-            (
-                snapshot,
-                row["shape_id"],
-                int(row["shape_pt_sequence"]),
-                float(row["shape_pt_lat"]),
-                float(row["shape_pt_lon"]),
-            )
-            for row in _rows(archive, "shapes", required, provider)
-            if row["shape_id"] in wanted
-        ),
-    )
+    skipped = 0
+
+    def point_rows() -> Iterator[SqlRow]:
+        nonlocal skipped
+        for row in _rows(archive, "shapes", required, provider):
+            if row["shape_id"] not in wanted:
+                continue
+            try:
+                yield (
+                    snapshot,
+                    row["shape_id"],
+                    int(row["shape_pt_sequence"]),
+                    float(row["shape_pt_lat"]),
+                    float(row["shape_pt_lon"]),
+                )
+            except ValueError:
+                skipped += 1
+
+    # Shapes are optional, so a bad file only costs the paths, never the timetables.
+    try:
+        _insert_batches(
+            conn, "INSERT OR REPLACE INTO shape_points VALUES (?, ?, ?, ?, ?)", point_rows()
+        )
+    except GtfsFeedError as err:
+        _LOGGER.warning("Leaving out shapes: %s", err)
+    if skipped:
+        _LOGGER.warning("Left out %d unreadable shape points", skipped)
 
 
 def _imported_lines(conn: sqlite3.Connection, snapshot: int) -> set[LineKey]:

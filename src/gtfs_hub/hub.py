@@ -396,9 +396,20 @@ class GtfsHub:
         """Return the stop IDs of a stop. Empty means it is absent."""
         return await self._read(lambda conn: catalogue.resolve_stop(conn, key))
 
-    async def async_line_shapes(self, key: LineKey) -> list[Shape]:
-        """Return the distinct paths of a stored line. Empty when the source has none."""
-        return await self._read(lambda conn: catalogue.line_shapes(conn, key))
+    async def async_line_shapes(
+        self, key: LineKey, service_date: date | None = None
+    ) -> list[Shape]:
+        """Return the distinct paths of a stored line. Empty when the source has none.
+
+        With a service date, only the snapshot serving it counts, so other days' variants
+        are left out.
+        """
+        if service_date is None:
+            return await self._read(lambda conn: catalogue.line_shapes(conn, key))
+        snapshot = await self.async_snapshot_for(service_date)
+        if snapshot is None:
+            return []
+        return await self._read(lambda conn: catalogue.line_shapes(conn, key, snapshot.id))
 
     async def async_stops_of_line(self, key: LineKey) -> list[Stop]:
         """Return the stops of a selected line across current snapshots."""

@@ -31,6 +31,7 @@ def _passes(shape: Shape, latitude: float, longitude: float) -> list[ShapeLocati
 
     passes: list[ShapeLocation] = []
     current: ShapeLocation | None = None
+    heading: float | None = None
     along = 0.0
     start = flat(shape.points[0])
     for point in shape.points[1:]:
@@ -40,15 +41,24 @@ def _passes(shape: Shape, latitude: float, longitude: float) -> list[ShapeLocati
         if length > 0:
             share = max(0.0, min(1.0, -(start[0] * dx + start[1] * dy) / length**2))
             offset = math.hypot(start[0] + share * dx, start[1] + share * dy)
+            direction = math.degrees(math.atan2(dx, dy)) % 360
             if offset <= MAX_OFFSET:
-                found = ShapeLocation(
-                    along + share * length, offset, math.degrees(math.atan2(dx, dy)) % 360
-                )
+                # A path turning back within reach starts a pass of its own.
+                if (
+                    current is not None
+                    and heading is not None
+                    and _angle(heading, direction) > _OPPOSED
+                ):
+                    passes.append(current)
+                    current = None
+                found = ShapeLocation(along + share * length, offset, direction)
                 if current is None or found.offset < current.offset:
                     current = found
+                heading = direction
             elif current is not None:
                 passes.append(current)
                 current = None
+                heading = None
             along += length
         start = end
     if current is not None:
