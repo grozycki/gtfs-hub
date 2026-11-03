@@ -218,13 +218,18 @@ def _read_shapes(conn: sqlite3.Connection, key: LineKey | None) -> dict[tuple[in
         ] = trips
     points: dict[tuple[int, str], list[tuple[float, float]]] = {}
     for snapshot, shape_id, latitude, longitude in conn.execute(
-        """
-        SELECT snapshot, shape_id, latitude, longitude FROM shape_points
-        ORDER BY snapshot, shape_id, sequence
-        """
+        f"""
+        SELECT p.snapshot, p.shape_id, p.latitude, p.longitude FROM shape_points p
+        WHERE (p.snapshot, p.shape_id) IN (
+            SELECT t.snapshot, t.shape_id FROM trips t
+            JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
+            WHERE t.shape_id IS NOT NULL {line_filter}
+        )
+        ORDER BY p.snapshot, p.shape_id, p.sequence
+        """,
+        params,
     ):
-        if (snapshot, shape_id) in counts:
-            points.setdefault((snapshot, shape_id), []).append((latitude, longitude))
+        points.setdefault((snapshot, shape_id), []).append((latitude, longitude))
     shapes = {}
     for ref, path in points.items():
         options = counts[ref]

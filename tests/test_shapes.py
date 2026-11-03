@@ -143,6 +143,36 @@ async def test_identical_paths_under_new_ids_are_one(
     assert sorted(shape.id for shape in shapes) == ["east2", "west"]
 
 
+async def test_newest_snapshot_wins_a_reused_id(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    moved = [(lat + 0.001, lon) for lat, lon in EAST]
+    first = shaped(PATHS)
+    second = shaped({**PATHS, "east": moved}, start="20261102")
+    a = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", first))
+    b = feed_server.put("b.zip", write_feed(tmp_path / "b.zip", second))
+    hub = GtfsHub(GenericProvider([a, b]), tmp_path / "db", session, clock=now)
+    await hub.async_sync([LINE_11])
+    east = [shape for shape in await hub.async_line_shapes(LINE_11) if shape.id == "east"]
+    assert [shape.points for shape in east] == [tuple(moved)]
+
+
+async def test_shapes_leave_with_an_expired_snapshot(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    old = shaped(PATHS, start="20261020")
+    old["feed_info"] = (
+        old["feed_info"][0],
+        [("Pub", "http://example.test", "pl", "20261020", "20261030")],
+    )
+    new = shaped({"east2": EAST}, [("r11", "svc", "t1", 0, "east2", "Beta")])
+    a = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", old))
+    b = feed_server.put("b.zip", write_feed(tmp_path / "b.zip", new))
+    hub = GtfsHub(GenericProvider([a, b]), tmp_path / "db", session, clock=now)
+    assert (await hub.async_sync([LINE_11])).removed == 1
+    assert count(tmp_path / "db", "SELECT count(DISTINCT shape_id) FROM shape_points") == 1
+
+
 async def test_vehicle_carries_its_shape(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
