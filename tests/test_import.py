@@ -160,7 +160,7 @@ async def test_times_past_24_are_stored_as_seconds(
     assert count(path, "SELECT max(departure_seconds) FROM stop_times") == 25 * 3600 + 20 * 60
 
 
-async def test_shapes_and_fares_are_not_stored(
+async def test_fares_and_unused_shapes_are_not_stored(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
     tables = base_tables()
@@ -172,7 +172,8 @@ async def test_shapes_and_fares_are_not_stored(
     conn = sqlite3.connect(path)
     names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
     conn.close()
-    assert not {"shapes", "fare_attributes"} & names
+    assert "fare_attributes" not in names
+    assert count(path, "SELECT count(*) FROM shape_points") == 0
 
 
 @pytest.mark.parametrize(

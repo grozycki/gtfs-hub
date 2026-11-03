@@ -304,11 +304,15 @@ def _import_timetables(
                     planned.units if planned else None,
                     planned.low_floor if planned else None,
                     planned.description if planned else None,
+                    _empty_to_none(row.get("shape_id")),
                 )
 
     _insert_batches(
-        conn, "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", trip_rows()
+        conn,
+        "INSERT OR REPLACE INTO trips VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        trip_rows(),
     )
+    _import_shapes(conn, archive, snapshot, provider)
     latest = 0
 
     def stop_time_rows() -> Iterator[SqlRow]:
@@ -338,6 +342,41 @@ def _import_timetables(
     conn.execute(
         "UPDATE snapshots SET max_seconds = max(coalesce(max_seconds, 0), ?) WHERE id = ?",
         (latest, snapshot),
+    )
+
+
+def _import_shapes(
+    conn: sqlite3.Connection, archive: zipfile.ZipFile, snapshot: int, provider: Provider
+) -> None:
+    """Store the shapes stored trips use and the snapshot lacks, in one pass over the file."""
+    if "shapes.txt" not in archive.namelist():
+        return
+    wanted = {
+        shape_id
+        for (shape_id,) in conn.execute(
+            "SELECT DISTINCT shape_id FROM trips t WHERE snapshot = ? AND shape_id IS NOT NULL"
+            " AND NOT EXISTS (SELECT 1 FROM shape_points p"
+            " WHERE p.snapshot = t.snapshot AND p.shape_id = t.shape_id)",
+            (snapshot,),
+        )
+    }
+    if not wanted:
+        return
+    required = ("shape_id", "shape_pt_lat", "shape_pt_lon", "shape_pt_sequence")
+    _insert_batches(
+        conn,
+        "INSERT OR REPLACE INTO shape_points VALUES (?, ?, ?, ?, ?)",
+        (
+            (
+                snapshot,
+                row["shape_id"],
+                int(row["shape_pt_sequence"]),
+                float(row["shape_pt_lat"]),
+                float(row["shape_pt_lon"]),
+            )
+            for row in _rows(archive, "shapes", required, provider)
+            if row["shape_id"] in wanted
+        ),
     )
 
 
@@ -429,6 +468,7 @@ def _apply_archive(
 
 
 TABLES_BY_SNAPSHOT = (
+    "shape_points",
     "stop_times",
     "trips",
     "stops",
@@ -468,6 +508,10 @@ def remove_deselected(conn: sqlite3.Connection, selection: Collection[LineKey]) 
         "DELETE FROM trips WHERE (snapshot, trip_id) IN (SELECT snapshot, trip_id FROM stale_trips)"
     )
     conn.execute("DROP TABLE stale_trips")
+    conn.execute(
+        "DELETE FROM shape_points WHERE (snapshot, shape_id) NOT IN"
+        " (SELECT snapshot, shape_id FROM trips WHERE shape_id IS NOT NULL)"
+    )
     conn.execute("DROP TABLE selected")
     conn.commit()
     return removed > 0

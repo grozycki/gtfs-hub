@@ -10,6 +10,8 @@ from .models import (
     Line,
     LineKey,
     ResolvedId,
+    Shape,
+    ShapeId,
     Snapshot,
     Stop,
     StopChoice,
@@ -26,6 +28,7 @@ class TripInfo:
     line: LineKey
     headsign: str | None
     planned_class: VehicleClass | None
+    shape: Shape | None = None
 
 
 _LINE_COLUMNS = """
@@ -191,12 +194,69 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
     )
 
 
+def _read_shapes(conn: sqlite3.Connection, key: LineKey | None) -> dict[tuple[int, str], Shape]:
+    """Read stored shapes by snapshot and ID, of one line or of all.
+
+    Each takes the line, headsign and direction most of its trips state.
+    """
+    line_filter = "" if key is None else "AND l.route_type = ? AND l.short_name = ?"
+    params = () if key is None else (key.route_type, key.short_name)
+    counts: dict[tuple[int, str], dict[tuple[int, str, str | None, int | None], int]] = {}
+    for snapshot, shape_id, route_type, short_name, headsign, direction, trips in conn.execute(
+        f"""
+        SELECT t.snapshot, t.shape_id, l.route_type, l.short_name, t.headsign, t.direction_id,
+            count(*)
+        FROM trips t
+        JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
+        WHERE t.shape_id IS NOT NULL {line_filter}
+        GROUP BY 1, 2, 3, 4, 5, 6
+        """,
+        params,
+    ):
+        counts.setdefault((snapshot, shape_id), {})[
+            (route_type, short_name, headsign, direction)
+        ] = trips
+    points: dict[tuple[int, str], list[tuple[float, float]]] = {}
+    for snapshot, shape_id, latitude, longitude in conn.execute(
+        """
+        SELECT snapshot, shape_id, latitude, longitude FROM shape_points
+        ORDER BY snapshot, shape_id, sequence
+        """
+    ):
+        if (snapshot, shape_id) in counts:
+            points.setdefault((snapshot, shape_id), []).append((latitude, longitude))
+    shapes = {}
+    for ref, path in points.items():
+        options = counts[ref]
+        route_type, short_name, headsign, direction = max(options, key=lambda o: options[o])
+        shapes[ref] = Shape(
+            ShapeId(ref[1]), LineKey(route_type, short_name), headsign, direction, tuple(path)
+        )
+    return shapes
+
+
+def line_shapes(conn: sqlite3.Connection, key: LineKey) -> list[Shape]:
+    """Return each distinct path of a stored line, the newest snapshot winning an ID."""
+    by_id: dict[str, Shape] = {}
+    for (_, shape_id), shape in sorted(_read_shapes(conn, key).items(), reverse=True):
+        by_id.setdefault(shape_id, shape)
+    distinct: dict[tuple[tuple[float, float], ...], Shape] = {}
+    for shape in by_id.values():
+        distinct.setdefault(shape.points, shape)
+    return sorted(
+        distinct.values(),
+        key=lambda shape: (shape.direction_id is None, shape.direction_id, shape.headsign or ""),
+    )
+
+
 def trip_lines(conn: sqlite3.Connection) -> dict[str, TripInfo]:
     """Return what vehicles need of every stored trip, the newest snapshot winning."""
+    shapes = _read_shapes(conn, None)
     rows = conn.execute(
         """
         SELECT t.trip_id, l.route_type, l.short_name, t.headsign, t.vehicle_name,
-            t.vehicle_length, t.vehicle_units, t.vehicle_low_floor, t.vehicle_description
+            t.vehicle_length, t.vehicle_units, t.vehicle_low_floor, t.vehicle_description,
+            t.snapshot, t.shape_id
         FROM trips t
         JOIN lines l ON l.snapshot = t.snapshot AND l.route_id = t.route_id
         ORDER BY t.snapshot
@@ -211,6 +271,7 @@ def trip_lines(conn: sqlite3.Connection) -> dict[str, TripInfo]:
             else VehicleClass(
                 row[4], row[5], row[6], None if row[7] is None else bool(row[7]), row[8]
             ),
+            shapes.get((row[9], row[10])),
         )
         for row in rows
     }

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .errors import GtfsNoDataError
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE snapshots (
@@ -83,6 +83,7 @@ CREATE TABLE trips (
     vehicle_units INTEGER,
     vehicle_low_floor INTEGER,
     vehicle_description TEXT,
+    shape_id TEXT,
     PRIMARY KEY (snapshot, trip_id)
 ) WITHOUT ROWID;
 CREATE INDEX trips_route ON trips (snapshot, route_id);
@@ -99,6 +100,14 @@ CREATE TABLE stop_times (
 );
 CREATE INDEX stop_times_trip ON stop_times (snapshot, trip_id);
 CREATE INDEX stop_times_stop ON stop_times (snapshot, stop_id, departure_seconds);
+CREATE TABLE shape_points (
+    snapshot INTEGER NOT NULL,
+    shape_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    PRIMARY KEY (snapshot, shape_id, sequence)
+) WITHOUT ROWID;
 """
 
 

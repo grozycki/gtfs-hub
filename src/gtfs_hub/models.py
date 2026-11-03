@@ -11,6 +11,7 @@ type StopKeyField = Literal["stop_id", "stop_code"]
 StopKey = NewType("StopKey", str)
 TripId = NewType("TripId", str)
 VehicleKey = NewType("VehicleKey", str)
+ShapeId = NewType("ShapeId", str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,27 @@ class VehicleClass:
 
 
 @dataclass(frozen=True, slots=True)
+class Shape:
+    """The path trips of a line drive, as latitude and longitude pairs in order."""
+
+    id: ShapeId
+    line: LineKey
+    # The most common one of the trips that drive it.
+    headsign: str | None
+    direction_id: int | None
+    points: tuple[tuple[float, float], ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ShapeLocation:
+    """Where a position lies on a shape, in metres and degrees clockwise from north."""
+
+    along: float
+    offset: float
+    bearing: float
+
+
+@dataclass(frozen=True, slots=True)
 class Vehicle:
     """A vehicle on a selected line. Optional values stay None when not sent."""
 
@@ -152,6 +174,8 @@ class Vehicle:
     planned_class: VehicleClass | None = None
     # The number riders see on the vehicle, which the provider may derive.
     label: str | None = None
+    # The path of its trip, when the source publishes one.
+    shape: Shape | None = None
 
 
 @dataclass(frozen=True, slots=True)

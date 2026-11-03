@@ -23,6 +23,7 @@ from .models import (
     Line,
     LineKey,
     ResolvedId,
+    Shape,
     Snapshot,
     StaticFeedRef,
     Stop,
@@ -334,6 +335,7 @@ class GtfsHub:
                         position.measured,
                         trip.planned_class,
                         self._provider.vehicle_label(position.vehicle_id, position.label),
+                        trip.shape,
                     )
                 )
         return vehicles
@@ -393,6 +395,10 @@ class GtfsHub:
     async def async_resolve_stop(self, key: StopKey) -> list[ResolvedId]:
         """Return the stop IDs of a stop. Empty means it is absent."""
         return await self._read(lambda conn: catalogue.resolve_stop(conn, key))
+
+    async def async_line_shapes(self, key: LineKey) -> list[Shape]:
+        """Return the distinct paths of a stored line. Empty when the source has none."""
+        return await self._read(lambda conn: catalogue.line_shapes(conn, key))
 
     async def async_stops_of_line(self, key: LineKey) -> list[Stop]:
         """Return the stops of a selected line across current snapshots."""

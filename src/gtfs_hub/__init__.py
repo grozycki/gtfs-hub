@@ -26,6 +26,9 @@ from .models import (
     Livery,
     RealtimeEndpoints,
     ResolvedId,
+    Shape,
+    ShapeId,
+    ShapeLocation,
     Snapshot,
     StaticFeedRef,
     Stop,
@@ -41,6 +44,7 @@ from .models import (
 )
 from .provider import BaseProvider, Provider, TableReader
 from .realtime import RealtimeData
+from .shapes import locate
 
 __all__ = [
     "BaseProvider",
@@ -62,6 +66,9 @@ __all__ = [
     "RealtimeData",
     "RealtimeEndpoints",
     "ResolvedId",
+    "Shape",
+    "ShapeId",
+    "ShapeLocation",
     "Snapshot",
     "StaticFeedRef",
     "Stop",
@@ -79,5 +86,6 @@ __all__ = [
     "async_list_provider_keys",
     "create_provider",
     "list_provider_keys",
+    "locate",
     "raise_for_status",
 ]

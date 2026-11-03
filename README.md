@@ -56,6 +56,12 @@ Departures cover the lines stored by the last sync, on every service date reachi
 
 Trips in `frequencies.txt` are not supported and are left out, with a log line.
 
+## Shapes
+
+When a source publishes `shapes.txt`, the paths of selected lines are stored with their timetables. `async_line_shapes(key)` returns each distinct path of a line, with its points in order, its direction and the most common headsign of its trips. Vehicles carry the `shape` of their trip.
+
+`locate(shape, latitude, longitude, after=None)` places a position on a path: metres along it, metres off it, and the bearing of the path there. A position more than 60 m off has no location. Pass the previous `along` of the same trip as `after`, so a path that runs one street both ways resolves to the pass ahead; without it, such a position has no location rather than a guess.
+
 ## Generic provider
 
 | Argument | Meaning |
