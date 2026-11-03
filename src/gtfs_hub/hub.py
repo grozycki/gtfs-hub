@@ -235,15 +235,21 @@ class GtfsHub:
                 _local(now, details[snapshot.id][0]),
             )
         }
-        windows = [snapshot for snapshot in snapshots if snapshot.id in listed]
-        # A file gone from the listing stays until newer files cover what is left of its window.
+        # A file gone from the listing stays until listed files, or newer kept ones, cover what
+        # is left of its window. Selection reads the newest snapshot of a date, so an older one
+        # under such cover is never read again.
         superseded = set()
         for snapshot in snapshots:
             if snapshot.id in listed or snapshot.id in expired:
                 continue
+            cover = [
+                other
+                for other in snapshots
+                if other.id in listed or (other.id > snapshot.id and other.id not in expired)
+            ]
             start = max(snapshot.valid_from, _local(now, details[snapshot.id][0]).date())
             # With its window over, a kept snapshot is serving night trips, so nothing replaces it.
-            if start <= snapshot.valid_to and not missing_dates(windows, start, snapshot.valid_to):
+            if start <= snapshot.valid_to and not missing_dates(cover, start, snapshot.valid_to):
                 superseded.add(snapshot.id)
         removed = expired | superseded
         importer.delete_snapshots(conn, removed)

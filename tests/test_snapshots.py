@@ -227,6 +227,27 @@ async def test_file_gone_from_listing_goes_once_covered(
     assert (await hub.async_sync([])).removed == 1
 
 
+async def test_only_the_newest_kept_snapshot_stays_for_a_gap(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    def put(name: str, start: str, end: str) -> StaticFeedRef:
+        # Each file names a stop after itself, so no two share a fingerprint.
+        stops = [("s1", "C-A", name, 50.1, 19.1), ("s2", "C-B", "B", 50.2, 19.2)]
+        tables = base_tables(start, end, stops=stops)
+        return StaticFeedRef(
+            feed_server.put(name, write_feed(tmp_path / name, tables)), version=name
+        )
+
+    # GZM once listed two sets for the same days, then left a Saturday out of the next one.
+    provider = Listed([put("1.zip", "20261101", "20261108"), put("2.zip", "20261101", "20261108")])
+    hub = GtfsHub(provider, tmp_path / "db", session, clock=now)
+    await hub.async_sync([])
+    provider.refs = [put("3.zip", "20261101", "20261106")]
+    await hub.async_sync([])
+    kept = {snapshot.version for snapshot in await hub.async_snapshots()}
+    assert kept == {"2.zip", "3.zip"}
+
+
 async def test_failed_listing_keeps_data(
     tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
 ) -> None:
