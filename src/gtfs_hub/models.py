@@ -119,6 +119,14 @@ class SyncResult:
 
 
 @dataclass(frozen=True, slots=True)
+class Livery:
+    """The colours of a fleet, each as #RRGGBB."""
+
+    body: str
+    trim: str
+
+
+@dataclass(frozen=True, slots=True)
 class VehicleClass:
     """The vehicle planned for a trip. The one that comes may differ."""
 

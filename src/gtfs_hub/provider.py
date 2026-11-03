@@ -5,7 +5,14 @@ from typing import Protocol, runtime_checkable
 
 from aiohttp import ClientSession
 
-from .models import Capabilities, RealtimeEndpoints, StaticFeedRef, StopKeyField, VehicleClass
+from .models import (
+    Capabilities,
+    Livery,
+    RealtimeEndpoints,
+    StaticFeedRef,
+    StopKeyField,
+    VehicleClass,
+)
 
 # Reads a table by its name without .txt. An absent table gives no rows.
 type TableReader = Callable[[str], Iterable[Mapping[str, str]]]
@@ -40,6 +47,11 @@ class Provider(Protocol):
         """Return what this source really supplies."""
         ...
 
+    @property
+    def livery(self) -> Livery | None:
+        """Return the colours of the fleet, or None."""
+        ...
+
     async def async_list_static_feeds(self, session: ClientSession) -> list[StaticFeedRef]:
         """Return the current schedule files."""
         ...
@@ -71,6 +83,7 @@ class BaseProvider:
     attribution: str | None = None
     stop_key: StopKeyField = "stop_id"
     capabilities: Capabilities = Capabilities()
+    livery: Livery | None = None
 
     def realtime_endpoints(self) -> RealtimeEndpoints:
         """Return no endpoints."""

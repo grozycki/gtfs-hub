@@ -77,6 +77,7 @@ def test_base_provider_defaults() -> None:
     assert provider.vehicle_label("vehicle-1", "") is None
     assert provider.realtime_endpoints().alerts is None
     assert provider.stop_key == "stop_id"
+    assert provider.livery is None
 
 
 def test_undeclared_capability_reads_absent() -> None:
