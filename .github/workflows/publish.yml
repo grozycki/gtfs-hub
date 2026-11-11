@@ -3,6 +3,8 @@ name: Publish
 on:
   push:
     tags: ["v*"]
+  # Run it by hand on a tag when the push did not start it.
+  workflow_dispatch:
 
 jobs:
   build:
