@@ -4,6 +4,14 @@ Provider-agnostic GTFS schedule library for low-memory hardware. It keeps a loca
 
 Requires Python 3.13 or newer.
 
+## Installation
+
+```bash
+pip install gtfs-hub
+```
+
+Versions follow [Semantic Versioning](https://semver.org/); below 1.0, a breaking change to the API, the provider contract or the database schema bumps the minor version. See the [changelog](CHANGELOG.md).
+
 ## Usage
 
 Any standard source works from plain URLs, through `GenericProvider`. Pass your own `aiohttp` session: the library never creates one.

@@ -1,7 +1,7 @@
 """The README example runs as written."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,7 +20,13 @@ async def test_usage_example(
     assert block is not None
     namespace: dict[str, object] = {}
     exec(block.group(1), namespace)
-    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    # The example reads the real clock, so its feed must cover today.
+    today = date.today()
+    tables = base_tables(
+        start=(today - timedelta(days=7)).strftime("%Y%m%d"),
+        end=(today + timedelta(days=7)).strftime("%Y%m%d"),
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
     run = namespace["main"]
     assert callable(run)
     await run(url, tmp_path / "db")

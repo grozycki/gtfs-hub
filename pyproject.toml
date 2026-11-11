@@ -9,7 +9,26 @@ description = "Provider-agnostic GTFS schedule library for low-memory hardware"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
+authors = [{ name = "grozycki" }]
+keywords = ["gtfs", "gtfs-realtime", "public-transport", "transit", "timetable"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 dependencies = ["aiohttp>=3.10", "gtfs-realtime-bindings>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/grozycki/gtfs-hub"
+Issues = "https://github.com/grozycki/gtfs-hub/issues"
+Changelog = "https://github.com/grozycki/gtfs-hub/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -22,6 +41,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gtfs_hub"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
