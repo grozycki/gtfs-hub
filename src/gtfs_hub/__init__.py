@@ -16,7 +16,7 @@ from .errors import (
     GtfsRateLimitError,
 )
 from .generic import GenericProvider
-from .hub import GtfsHub, delete_store
+from .hub import GtfsHub, delete_store, kept_files_dir
 from .models import (
     Capabilities,
     Departure,
@@ -86,6 +86,7 @@ __all__ = [
     "async_list_provider_keys",
     "create_provider",
     "delete_store",
+    "kept_files_dir",
     "list_provider_keys",
     "locate",
     "raise_for_status",

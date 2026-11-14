@@ -46,10 +46,10 @@ class FileOutcome:
 
 
 @contextmanager
-def _raw_table(
+def _open_text(
     archive: zipfile.ZipFile, table: str, required: tuple[str, ...]
-) -> Iterator[tuple[list[str], Iterator[list[str]]]]:
-    """Open a table as its stripped column names and its raw rows, as `csv.reader` gives them."""
+) -> Iterator[tuple[list[str], io.TextIOWrapper]]:
+    """Open a table as its stripped column names and the text after its header line."""
     member = f"{table}.txt"
     if member not in archive.namelist():
         raise GtfsFeedError(f"Missing {member}")
@@ -57,12 +57,20 @@ def _raw_table(
         archive.open(member) as raw,
         io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text,
     ):
-        reader = csv.reader(text)
-        columns = [name.strip() for name in next(reader, [])]
+        columns = [name.strip() for name in next(csv.reader(text), [])]
         absent = set(required) - set(columns)
         if absent:
             raise GtfsFeedError(f"{member} lacks {', '.join(sorted(absent))}")
-        yield columns, (values for values in reader if values)
+        yield columns, text
+
+
+@contextmanager
+def _raw_table(
+    archive: zipfile.ZipFile, table: str, required: tuple[str, ...]
+) -> Iterator[tuple[list[str], Iterator[list[str]]]]:
+    """Open a table as its stripped column names and its raw rows, as `csv.reader` gives them."""
+    with _open_text(archive, table, required) as (columns, text):
+        yield columns, (values for values in csv.reader(text) if values)
 
 
 def _as_dict(columns: list[str], values: list[str]) -> dict[str, str]:
@@ -104,17 +112,7 @@ def _picked_table(
     Most rows of a large table are skipped, so a row is only parsed once a split of its line
     shows it may be wanted, or cannot tell.
     """
-    member = f"{table}.txt"
-    if member not in archive.namelist():
-        raise GtfsFeedError(f"Missing {member}")
-    with (
-        archive.open(member) as raw,
-        io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text,
-    ):
-        columns = [name.strip() for name in next(csv.reader(text), [])]
-        absent = set(required) - set(columns)
-        if absent:
-            raise GtfsFeedError(f"{member} lacks {', '.join(sorted(absent))}")
+    with _open_text(archive, table, required) as (columns, text):
         index = columns.index(column)
 
         def picked() -> Iterator[list[str]]:

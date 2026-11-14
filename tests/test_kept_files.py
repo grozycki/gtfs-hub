@@ -1,5 +1,6 @@
 """Schedule files kept between syncs, and their cleanup."""
 
+import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,8 @@ from gtfs_hub import (
     LineKey,
     StaticFeedRef,
     delete_store,
+    kept_files_dir,
 )
-from gtfs_hub.hub import kept_files_dir
 
 LINE_11 = LineKey(3, "11")
 LINE_12 = LineKey(3, "12")
@@ -130,6 +131,37 @@ async def test_delisted_file_is_deleted(
     provider.refs = provider.refs[:1]
     await hub.async_sync([LINE_11])
     assert len(kept(path)) == 1
+    # Nothing listed covers the second window, so its snapshot stays while its file goes.
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT count(*) FROM snapshots").fetchone()[0] == 2
+    conn.close()
+
+
+async def test_file_that_cannot_be_kept_still_imports(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    kept_files_dir(path).write_bytes(b"not a directory")
+    hub = GtfsHub(Listed([StaticFeedRef(url, version="v1")]), path, session, clock=now)
+    assert (await hub.async_sync([LINE_11])).imported == 1
+    assert await hub.async_stops_of_line(LINE_11)
+    assert [item.name for item in tmp_path.iterdir() if item.name.startswith(".db")] == []
+
+
+async def test_directory_at_a_kept_name_is_replaced(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    provider = Listed([StaticFeedRef(url, version="v1")])
+    hub = GtfsHub(provider, path, session, clock=now)
+    await hub.async_sync([LINE_11])
+    (file,) = kept(path)
+    file.unlink()
+    (file / "inner").mkdir(parents=True)
+    assert (await hub.async_sync([LINE_11, LINE_12])).extended == 1
+    assert file.is_file()
 
 
 async def test_stray_and_partial_files_are_deleted(

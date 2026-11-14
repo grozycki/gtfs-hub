@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 import os
 import shutil
 import sqlite3
@@ -51,6 +52,7 @@ from .snapshots import is_expired, missing_dates, select_snapshot
 # Far below the session default, as a stalled feed must not hold up the schedule.
 _REALTIME_TIMEOUT = ClientTimeout(total=20)
 _NO_FIX = 0.001
+_LOGGER = logging.getLogger(__name__)
 
 
 def _is_real_position(latitude: float, longitude: float) -> bool:
@@ -108,9 +110,18 @@ def _count(result: SyncResult, action: str) -> SyncResult:
 
 
 def _keep(file_path: Path, kept: Path) -> None:
-    """Move an imported download among the kept files."""
-    kept.parent.mkdir(exist_ok=True)
-    os.replace(file_path, kept)
+    """Move an imported download among the kept files, or drop it when that fails.
+
+    Keeping only saves a later download, so a failure must not fail the sync.
+    """
+    try:
+        kept.parent.mkdir(exist_ok=True)
+        if kept.is_dir() and not kept.is_symlink():
+            shutil.rmtree(kept)
+        os.replace(file_path, kept)
+    except OSError as err:
+        _LOGGER.warning("Cannot keep %s for later syncs: %s", kept.name, err)
+        file_path.unlink(missing_ok=True)
 
 
 def _swap_in(work_path: Path, path: Path) -> None:
@@ -175,7 +186,7 @@ def delete_store(path: Path) -> None:
     """Delete a schedule database, its kept files and leftovers of interrupted syncs. Blocks."""
     path = Path(os.path.abspath(path))
     path.unlink(missing_ok=True)
-    shutil.rmtree(kept_files_dir(path), ignore_errors=True)
+    _remove(kept_files_dir(path))
     if path.parent.is_dir():
         for leftover in path.parent.glob(f".{path.name}.*"):
             _remove(leftover)
