@@ -7,6 +7,7 @@ import logging
 import sqlite3
 import zipfile
 from collections.abc import Collection, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import islice
@@ -15,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import GtfsFeedError
 from .models import LineKey, StaticFeedRef
-from .provider import Provider
+from .provider import BaseProvider, Provider
 from .text import fold
 
 type SqlRow = tuple[str | int | float | None, ...]
@@ -31,6 +32,8 @@ _WEEKDAY_COLUMNS = (
     "sunday",
 )
 
+_TIME_COLUMNS = ("arrival_time", "departure_time")
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -42,10 +45,11 @@ class FileOutcome:
     action: str  # imported, relabelled or extended
 
 
-def _rows(
-    archive: zipfile.ZipFile, table: str, required: tuple[str, ...], provider: Provider
-) -> Iterator[dict[str, str]]:
-    """Stream a table from an open archive, one normalised row at a time."""
+@contextmanager
+def _raw_table(
+    archive: zipfile.ZipFile, table: str, required: tuple[str, ...]
+) -> Iterator[tuple[list[str], Iterator[list[str]]]]:
+    """Open a table as its stripped column names and its raw rows, as `csv.reader` gives them."""
     member = f"{table}.txt"
     if member not in archive.namelist():
         raise GtfsFeedError(f"Missing {member}")
@@ -53,14 +57,118 @@ def _rows(
         archive.open(member) as raw,
         io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text,
     ):
-        reader = csv.DictReader(text, restval="")
-        columns = [name.strip() for name in reader.fieldnames or ()]
-        reader.fieldnames = columns
+        reader = csv.reader(text)
+        columns = [name.strip() for name in next(reader, [])]
         absent = set(required) - set(columns)
         if absent:
             raise GtfsFeedError(f"{member} lacks {', '.join(sorted(absent))}")
-        for row in reader:
-            yield provider.normalize_static(table, row)
+        yield columns, (values for values in reader if values)
+
+
+def _as_dict(columns: list[str], values: list[str]) -> dict[str, str]:
+    """Name the values of a raw row, with missing trailing ones empty and extra ones dropped."""
+    row = dict(zip(columns, values, strict=False))
+    if len(values) < len(columns):
+        for name in columns[len(values) :]:
+            row.setdefault(name, "")
+    return row
+
+
+def _value(values: list[str], index: int) -> str:
+    return values[index] if index < len(values) else ""
+
+
+def _plain_field(record: str, index: int) -> str | None:
+    """Read one field of a CSV record by splitting, or None when quotes make that unsafe."""
+    parts = record.split(",", index + 1)
+    if len(parts) <= index or any('"' in part for part in parts[:index]):
+        return None
+    value = parts[index].rstrip("\r\n") if len(parts) == index + 1 else parts[index]
+    if '"' not in value:
+        return value
+    if len(value) >= 2 and value[0] == value[-1] == '"' and '"' not in value[1:-1]:
+        return value[1:-1]
+    return None
+
+
+@contextmanager
+def _picked_table(
+    archive: zipfile.ZipFile,
+    table: str,
+    required: tuple[str, ...],
+    column: str,
+    wanted: Collection[str],
+) -> Iterator[tuple[list[str], Iterator[list[str]]]]:
+    """Open a table as its columns and the raw rows whose column holds a wanted value.
+
+    Most rows of a large table are skipped, so a row is only parsed once a split of its line
+    shows it may be wanted, or cannot tell.
+    """
+    member = f"{table}.txt"
+    if member not in archive.namelist():
+        raise GtfsFeedError(f"Missing {member}")
+    with (
+        archive.open(member) as raw,
+        io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text,
+    ):
+        columns = [name.strip() for name in next(csv.reader(text), [])]
+        absent = set(required) - set(columns)
+        if absent:
+            raise GtfsFeedError(f"{member} lacks {', '.join(sorted(absent))}")
+        index = columns.index(column)
+
+        def picked() -> Iterator[list[str]]:
+            for line in text:
+                record = line
+                # A quoted field may hold a line break, so a record ends at an even count.
+                while '"' in record and record.count('"') % 2:
+                    following = next(text, None)
+                    if following is None:
+                        break
+                    record += following
+                value = _plain_field(record, index)
+                if value is not None and value not in wanted:
+                    continue
+                values = next(csv.reader([record]), [])
+                if values and _value(values, index) in wanted:
+                    yield values
+
+        yield columns, picked()
+
+
+def _keeps_rows(provider: Provider) -> bool:
+    """Tell whether a provider leaves rows as they are, so raw IDs are its IDs."""
+    return getattr(type(provider), "normalize_static", None) is BaseProvider.normalize_static
+
+
+@contextmanager
+def _selected_rows(
+    archive: zipfile.ZipFile,
+    table: str,
+    required: tuple[str, ...],
+    column: str,
+    wanted: Collection[str],
+    provider: Provider,
+) -> Iterator[Iterator[dict[str, str]]]:
+    """Open the normalised rows of a table whose column holds a wanted value.
+
+    Rows of a provider that keeps rows unchanged are picked from the raw lines. Any other
+    provider may change the column, so each of its rows is normalised before the check.
+    """
+    if not _keeps_rows(provider):
+        yield (row for row in _rows(archive, table, required, provider) if row[column] in wanted)
+        return
+    with _picked_table(archive, table, required, column, wanted) as (columns, rows):
+        yield (provider.normalize_static(table, _as_dict(columns, values)) for values in rows)
+
+
+def _rows(
+    archive: zipfile.ZipFile, table: str, required: tuple[str, ...], provider: Provider
+) -> Iterator[dict[str, str]]:
+    """Stream a table from an open archive, one normalised row at a time."""
+    with _raw_table(archive, table, required) as (columns, rows):
+        for values in rows:
+            yield provider.normalize_static(table, _as_dict(columns, values))
 
 
 def _insert_batches(conn: sqlite3.Connection, sql: str, rows: Iterable[SqlRow]) -> None:
@@ -313,36 +421,68 @@ def _import_timetables(
         trip_rows(),
     )
     _import_shapes(conn, archive, snapshot, provider)
+    # The latest time covers every trip of the snapshot, so it is read once, on the first import.
+    known = conn.execute("SELECT max_seconds FROM snapshots WHERE id = ?", (snapshot,)).fetchone()
+    find_latest = known is None or known[0] is None
     latest = 0
+
+    def stored_rows() -> Iterator[dict[str, str]]:
+        """Yield the normalised stop times of stored trips, noting the latest time if asked."""
+        nonlocal latest
+        required = ("trip_id", "stop_id", "stop_sequence", *_TIME_COLUMNS)
+        if not find_latest:
+            with _selected_rows(
+                archive, "stop_times", required, "trip_id", trips, provider
+            ) as rows:
+                yield from rows
+            return
+        # The latest time needs every row, so the whole table is parsed once.
+        plain = _keeps_rows(provider)
+        with _raw_table(archive, "stop_times", required) as (columns, raw_rows):
+            trip_at = columns.index("trip_id")
+            arrival_at, departure_at = (columns.index(name) for name in _TIME_COLUMNS)
+            for values in raw_rows:
+                if plain and _value(values, trip_at) not in trips:
+                    latest = max(
+                        latest,
+                        _parse_time(_value(values, arrival_at)) or 0,
+                        _parse_time(_value(values, departure_at)) or 0,
+                    )
+                    continue
+                row = provider.normalize_static("stop_times", _as_dict(columns, values))
+                if row["trip_id"] in trips:
+                    yield row
+                else:
+                    latest = max(
+                        latest,
+                        _parse_time(row["arrival_time"]) or 0,
+                        _parse_time(row["departure_time"]) or 0,
+                    )
 
     def stop_time_rows() -> Iterator[SqlRow]:
         nonlocal latest
-        required = ("trip_id", "stop_id", "stop_sequence", "arrival_time", "departure_time")
-        for row in _rows(archive, "stop_times", required, provider):
+        for row in stored_rows():
             arrival = _parse_time(row["arrival_time"])
             departure = _parse_time(row["departure_time"])
             departure = arrival if departure is None else departure
             latest = max(latest, arrival or 0, departure or 0)
-            if row["trip_id"] in trips:
-                yield (
-                    snapshot,
-                    row["trip_id"],
-                    int(row["stop_sequence"]),
-                    row["stop_id"],
-                    arrival,
-                    departure,
-                    int(row.get("pickup_type") or 0),
-                    int(row.get("drop_off_type") or 0),
-                    _empty_to_none(row.get("stop_headsign")),
-                )
+            yield (
+                snapshot,
+                row["trip_id"],
+                int(row["stop_sequence"]),
+                row["stop_id"],
+                arrival,
+                departure,
+                int(row.get("pickup_type") or 0),
+                int(row.get("drop_off_type") or 0),
+                _empty_to_none(row.get("stop_headsign")),
+            )
 
     _insert_batches(
         conn, "INSERT INTO stop_times VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", stop_time_rows()
     )
-    conn.execute(
-        "UPDATE snapshots SET max_seconds = max(coalesce(max_seconds, 0), ?) WHERE id = ?",
-        (latest, snapshot),
-    )
+    if find_latest:
+        conn.execute("UPDATE snapshots SET max_seconds = ? WHERE id = ?", (latest, snapshot))
 
 
 def _import_shapes(
@@ -367,19 +507,18 @@ def _import_shapes(
 
     def point_rows() -> Iterator[SqlRow]:
         nonlocal skipped
-        for row in _rows(archive, "shapes", required, provider):
-            if row["shape_id"] not in wanted:
-                continue
-            try:
-                yield (
-                    snapshot,
-                    row["shape_id"],
-                    int(row["shape_pt_sequence"]),
-                    float(row["shape_pt_lat"]),
-                    float(row["shape_pt_lon"]),
-                )
-            except ValueError:
-                skipped += 1
+        with _selected_rows(archive, "shapes", required, "shape_id", wanted, provider) as rows:
+            for row in rows:
+                try:
+                    yield (
+                        snapshot,
+                        row["shape_id"],
+                        int(row["shape_pt_sequence"]),
+                        float(row["shape_pt_lat"]),
+                        float(row["shape_pt_lon"]),
+                    )
+                except ValueError:
+                    skipped += 1
 
     # Shapes are optional, so a bad file only costs the paths, never the timetables.
     try:

@@ -24,6 +24,7 @@ from gtfs_hub import (
     GtfsHub,
     GtfsRateLimitError,
     LineKey,
+    importer,
 )
 from gtfs_hub.download import async_download
 
@@ -369,3 +370,157 @@ def test_peak_memory_does_not_follow_row_count(tmp_path: Path) -> None:
     large = _peak_memory(tmp_path, 2_000_000)
     print(f"peak memory: {small} and {large}")
     assert large < small * 1.2
+
+
+async def test_adding_a_line_keeps_the_latest_service_time(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    hub = GtfsHub(GenericProvider([url]), path, session, clock=now)
+    await hub.async_sync([LINE_11])
+    # Line 12 runs past midnight, until 25:20, and line 11 ends at 08:05.
+    assert count(path, "SELECT max_seconds FROM snapshots") == 25 * 3600 + 20 * 60
+    await hub.async_sync([LINE_11, LINE_12])
+    assert count(path, "SELECT max_seconds FROM snapshots") == 25 * 3600 + 20 * 60
+
+
+async def test_latest_service_time_covers_lines_added_later(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    hub = GtfsHub(GenericProvider([url]), path, session, clock=now)
+    await hub.async_sync([])
+    await hub.async_sync([LINE_11])
+    assert count(path, "SELECT max_seconds FROM snapshots") == 25 * 3600 + 20 * 60
+
+
+async def test_provider_that_renames_trips_keeps_its_stop_times(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    class Renaming(GenericProvider):
+        @override
+        def normalize_static(self, table: str, row: dict[str, str]) -> dict[str, str]:
+            if "trip_id" in row:
+                row["trip_id"] = row["trip_id"].removeprefix("raw-")
+            return row
+
+    tables = base_tables(
+        trips=[("r11", "svc", "raw-t1", 0), ("r12", "svc", "raw-t2", 1)],
+        stop_times=[
+            ("raw-t1", "08:00:00", "08:00:00", "s1", 0),
+            ("raw-t1", "08:05:00", "08:05:00", "s2", 1),
+            ("raw-t2", "25:10:00", "25:10:00", "s2", 0),
+            ("raw-t2", "25:20:00", "25:20:00", "s3", 1),
+        ],
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
+    path = tmp_path / "db"
+    hub = GtfsHub(Renaming([url]), path, session, clock=now)
+    await hub.async_sync([LINE_11])
+    assert stop_times_of(path, "t1") == 2
+    assert count(path, "SELECT max_seconds FROM snapshots") == 25 * 3600 + 20 * 60
+    await hub.async_sync([LINE_11, LINE_12])
+    assert stop_times_of(path, "t2") == 2
+
+
+def test_only_unchanged_rows_take_the_raw_path() -> None:
+    class Renaming(GenericProvider):
+        @override
+        def normalize_static(self, table: str, row: dict[str, str]) -> dict[str, str]:
+            return row
+
+    assert importer._keeps_rows(GenericProvider(["u"]))
+    assert not importer._keeps_rows(Renaming(["u"]))
+
+
+async def test_short_rows_and_a_bom_header_are_read(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables()
+    tables["stop_times"] = (
+        "\ufefftrip_id,arrival_time,departure_time,stop_id,stop_sequence,stop_headsign",
+        [
+            ("t1", "08:00:00", "08:00:00", "s1", 0),
+            ("t1", "08:05:00", "08:05:00", "s2", 1, "Beta"),
+        ],
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
+    path = tmp_path / "db"
+    await GtfsHub(GenericProvider([url]), path, session, clock=now).async_sync([LINE_11])
+    conn = sqlite3.connect(path)
+    rows = conn.execute(
+        "SELECT stop_sequence, headsign FROM stop_times ORDER BY stop_sequence"
+    ).fetchall()
+    conn.close()
+    assert rows == [(0, None), (1, "Beta")]
+
+
+async def test_missing_stop_times_column_is_a_feed_error(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    tables = base_tables()
+    tables["stop_times"] = (
+        "trip_id,arrival_time,departure_time,stop_id",
+        [("t1", "08:00:00", "08:00:00", "s1")],
+    )
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", tables))
+    hub = GtfsHub(GenericProvider([url]), tmp_path / "db", session, clock=now)
+    with pytest.raises(GtfsFeedError, match=r"stop_times\.txt lacks stop_sequence"):
+        await hub.async_sync([LINE_11])
+
+
+async def test_sync_leaves_planner_statistics(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    hub = GtfsHub(GenericProvider([url]), path, session, clock=now)
+    await hub.async_sync([LINE_11])
+    assert count(path, "SELECT count(*) FROM sqlite_stat1 WHERE tbl = 'stop_times'") > 0
+
+
+def _picked(tmp_path: Path, body: str, wanted: set[str]) -> list[list[str]]:
+    path = tmp_path / "t.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("stop_times.txt", body)
+    with (
+        zipfile.ZipFile(path) as archive,
+        importer._picked_table(archive, "stop_times", ("trip_id",), "trip_id", wanted) as (
+            _,
+            rows,
+        ),
+    ):
+        return list(rows)
+
+
+def test_picked_rows_read_quoted_values_exactly(tmp_path: Path) -> None:
+    body = (
+        "stop_id,trip_id,stop_headsign\r\n"
+        's1,t1,""\r\n'
+        's2,"t1",North\r\n'
+        '"s,3",t1,"a, b"\r\n'
+        's4,"t,2",x\r\n'
+        's5,t2,"two\r\nlines"\r\n'
+        's6,t1,"say ""hi"""\r\n'
+        "\r\n"
+        "s7,t3,x\r\n"
+    )
+    assert _picked(tmp_path, body, {"t1", "t,2"}) == [
+        ["s1", "t1", ""],
+        ["s2", "t1", "North"],
+        ["s,3", "t1", "a, b"],
+        ["s4", "t,2", "x"],
+        ["s6", "t1", 'say "hi"'],
+    ]
+
+
+def test_picked_rows_keep_a_line_break_inside_a_wanted_row(tmp_path: Path) -> None:
+    body = 'trip_id,stop_headsign\n"t2",x\nt1,"two\nlines"\nt2,y\n'
+    assert _picked(tmp_path, body, {"t1"}) == [["t1", "two\nlines"]]
+
+
+def test_picked_rows_need_their_column(tmp_path: Path) -> None:
+    with pytest.raises(GtfsFeedError, match="lacks trip_id"):
+        _picked(tmp_path, "stop_id\ns1\n", {"t1"})

@@ -41,7 +41,7 @@ async def main(url: str, database: Path) -> None:
             print(LineKey(key.route_type, key.short_name), [stop.name for stop in stops])
 ```
 
-Call `async_sync` with the full selection whenever the source may have changed or the selection did. Lines that are new are imported, lines that are gone are removed, and unchanged files are not downloaded. On failure it raises a `GtfsError`, and the previous database stays in use. The database is a cache, so it is safe to delete: the next sync rebuilds it.
+Call `async_sync` with the full selection whenever the source may have changed or the selection did. Lines that are new are imported, lines that are gone are removed, and unchanged files are not downloaded. On failure it raises a `GtfsError`, and the previous database stays in use. The database is a cache, so it is safe to delete: the next sync rebuilds it. Downloaded files whose listing states a version are kept next to it, in `<database>.files/`, so adding a line reads them again rather than downloading them. Each successful listing deletes the kept files it no longer names. To remove everything, call `delete_store(path)` in an executor, as it blocks.
 
 ## Departures
 

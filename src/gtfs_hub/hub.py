@@ -1,10 +1,12 @@
 """The public entry point: keep a local schedule and query it."""
 
 import asyncio
+import hashlib
 import os
 import shutil
 import sqlite3
 import tempfile
+import zipfile
 from collections.abc import Callable, Collection
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -105,8 +107,16 @@ def _count(result: SyncResult, action: str) -> SyncResult:
     return replace(result, skipped=result.skipped + 1)
 
 
+def _keep(file_path: Path, kept: Path) -> None:
+    """Move an imported download among the kept files."""
+    kept.parent.mkdir(exist_ok=True)
+    os.replace(file_path, kept)
+
+
 def _swap_in(work_path: Path, path: Path) -> None:
-    """Check a finished database and put it in place in one step."""
+    """Refresh planner statistics, check a finished database and put it in place in one step."""
+    # Without statistics the planner picks indexes by guesswork, which grows costly with the data.
+    _with_conn(open_work, work_path, lambda conn: conn.execute("ANALYZE"))
     status = _with_conn(
         open_work, work_path, lambda conn: conn.execute("PRAGMA quick_check").fetchone()[0]
     )
@@ -118,6 +128,57 @@ def _swap_in(work_path: Path, path: Path) -> None:
     finally:
         os.close(descriptor)
     os.replace(work_path, path)
+
+
+def kept_files_dir(path: Path) -> Path:
+    """Return where the schedule files of a database are kept between syncs."""
+    return path.with_name(f"{path.name}.files")
+
+
+def _kept_name(ref: StaticFeedRef) -> str | None:
+    """Name a file by its URL and version, or None when nothing tells a changed file apart."""
+    if ref.version is None:
+        return None
+    digest = hashlib.sha256(f"{ref.url}\n{ref.version}".encode()).hexdigest()
+    return f"{digest[:24]}.zip"
+
+
+def _is_readable_zip(path: Path) -> bool:
+    """Tell whether a kept file opens as an archive, which a cut-off file does not.
+
+    Its members are checked as they are read, and a failing file is dropped then.
+    """
+    try:
+        with zipfile.ZipFile(path):
+            return True
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _prune_kept(directory: Path, wanted: set[str]) -> None:
+    """Delete kept files the listing no longer names, and anything else left there."""
+    if not directory.is_dir():
+        return
+    for entry in directory.iterdir():
+        if entry.name not in wanted:
+            _remove(entry)
+
+
+def delete_store(path: Path) -> None:
+    """Delete a schedule database, its kept files and leftovers of interrupted syncs. Blocks."""
+    path = Path(os.path.abspath(path))
+    path.unlink(missing_ok=True)
+    shutil.rmtree(kept_files_dir(path), ignore_errors=True)
+    if path.parent.is_dir():
+        for leftover in path.parent.glob(f".{path.name}.*"):
+            _remove(leftover)
 
 
 class GtfsHub:
@@ -158,13 +219,18 @@ class GtfsHub:
             refs = await self._provider.async_list_static_feeds(self._session)
             if not refs:
                 raise GtfsFeedError(f"{self._provider.key} listed no schedule files")
-            workspace = Path(await self._run(self._make_workspace))
+            wanted = {name for ref in refs if (name := _kept_name(ref)) is not None}
             try:
-                return await self._sync_in(workspace, refs, selection)
-            except (OSError, sqlite3.Error) as err:
-                raise GtfsError(f"Cannot store the schedule: {err}") from err
+                workspace = Path(await self._run(self._make_workspace))
+                try:
+                    return await self._sync_in(workspace, refs, selection)
+                except (OSError, sqlite3.Error) as err:
+                    raise GtfsError(f"Cannot store the schedule: {err}") from err
+                finally:
+                    await self._run(partial(shutil.rmtree, workspace, ignore_errors=True))
             finally:
-                await self._run(partial(shutil.rmtree, workspace, ignore_errors=True))
+                # The listing is known good here, so whatever it no longer names can go.
+                await self._run(partial(_prune_kept, kept_files_dir(self._path), wanted))
 
     def _make_workspace(self) -> str:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,16 +258,30 @@ class GtfsHub:
                 listed.add(snapshot)
                 result = replace(result, skipped=result.skipped + 1)
                 continue
-            file_path = workspace / f"{number}.zip"
-            await async_download(self._session, ref.url, file_path)
-            outcome = await self._run(
-                partial(
-                    self._work,
-                    work_path,
-                    partial(_apply, ref, file_path, selection, self._provider),
+            name = _kept_name(ref)
+            kept = None if name is None else kept_files_dir(self._path) / name
+            if kept is not None and await self._run(partial(_is_readable_zip, kept)):
+                file_path = kept
+            else:
+                file_path = workspace / f"{number}.zip"
+                await async_download(self._session, ref.url, file_path)
+            try:
+                outcome = await self._run(
+                    partial(
+                        self._work,
+                        work_path,
+                        partial(_apply, ref, file_path, selection, self._provider),
+                    )
                 )
-            )
-            await self._run(file_path.unlink)
+            except GtfsFeedError:
+                # A kept file that will not import is fetched afresh next time.
+                if file_path == kept:
+                    await self._run(partial(kept.unlink, missing_ok=True))
+                raise
+            if kept is None:
+                await self._run(file_path.unlink)
+            elif file_path != kept:
+                await self._run(partial(_keep, file_path, kept))
             listed.add(outcome.snapshot_id)
             result = _count(result, outcome.action)
         removed, lines_removed = await self._run(

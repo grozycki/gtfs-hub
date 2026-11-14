@@ -1,5 +1,6 @@
 """Searching and resolving stable keys across snapshots."""
 
+import sqlite3
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from aiohttp import ClientSession
 
 from conftest import FeedServer, Tables, base_tables, write_feed
 from gtfs_hub import GenericProvider, GtfsHub, LineKey, ResolvedId, StopKey, StopKeyField
+from gtfs_hub.catalogue import STOP_CHOICES_SQL
 
 
 async def make_hub(
@@ -218,3 +220,50 @@ async def test_stop_choice_has_no_direction_where_trips_end(
     choices = {choice.stop.key: choice for choice in await hub.async_stop_choices([line])}
     assert choices[StopKey("s1")].headsigns == ("End",)
     assert choices[StopKey("s2")].headsigns == ()
+
+
+async def test_stop_choices_cover_every_snapshot(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    later = base_tables(
+        start="20261101",
+        end="20261107",
+        stop_times=[
+            ("t1", "08:00:00", "08:00:00", "s3", 0),
+            ("t1", "08:05:00", "08:05:00", "s2", 1),
+            ("t2", "25:10:00", "25:10:00", "s2", 0),
+            ("t2", "25:20:00", "25:20:00", "s3", 1),
+        ],
+    )
+    urls = [
+        feed_server.put(f"{n}.zip", write_feed(tmp_path / f"{n}.zip", tables))
+        for n, tables in enumerate((base_tables(), later))
+    ]
+    hub = GtfsHub(GenericProvider(urls), tmp_path / "db", session, clock=now)
+    line = LineKey(3, "11")
+    await hub.async_sync([line])
+    keys = {choice.stop.key for choice in await hub.async_stop_choices([line])}
+    assert keys == {"s1", "s2", "s3"}
+
+
+async def test_stop_choices_read_only_the_lines_trips(
+    tmp_path: Path, feed_server: FeedServer, session: ClientSession, now: Callable[[], datetime]
+) -> None:
+    url = feed_server.put("a.zip", write_feed(tmp_path / "a.zip", base_tables()))
+    path = tmp_path / "db"
+    await GtfsHub(GenericProvider([url]), path, session, clock=now).async_sync(
+        [LineKey(3, "11"), LineKey(3, "12")]
+    )
+    # With statistics of four rows a scan is right, so the plan is pinned for a planner that
+    # has none, where the old query walked every stop time of the snapshot.
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE sqlite_stat1")
+    conn.commit()
+    conn.close()
+    conn = sqlite3.connect(path)
+    plan = " ".join(
+        row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {STOP_CHOICES_SQL}", (3, "11"))
+    )
+    conn.close()
+    assert "stop_times_trip" in plan
+    assert "stop_times_stop" not in plan

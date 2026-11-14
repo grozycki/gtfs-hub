@@ -151,6 +151,32 @@ def stops_of_line(conn: sqlite3.Connection, key: LineKey) -> list[Stop]:
     return sorted(found.values(), key=lambda stop: (fold(stop.name), stop.key))
 
 
+# Starting from the line's trips keeps the work to its own stop times, and the window finds
+# each trip's last stop in the same pass.
+STOP_CHOICES_SQL = f"""
+    WITH chosen AS (
+        SELECT t.snapshot, t.trip_id, t.headsign
+        FROM lines l
+        JOIN trips t ON t.snapshot = l.snapshot AND t.route_id = l.route_id
+        WHERE l.route_type = ? AND l.short_name = ?
+    ), times AS (
+        SELECT c.snapshot, c.headsign, st.stop_id, st.pickup_type, st.drop_off_type,
+            st.headsign AS stop_headsign,
+            st.stop_sequence < max(st.stop_sequence)
+                OVER (PARTITION BY c.snapshot, c.trip_id) AS not_last
+        FROM chosen c
+        CROSS JOIN stop_times st ON st.snapshot = c.snapshot AND st.trip_id = c.trip_id
+    )
+    SELECT DISTINCT {_STOP_COLUMNS}, s.snapshot,
+        times.pickup_type != 1 AND times.not_last,
+        coalesce(times.stop_headsign, times.headsign)
+    FROM times
+    JOIN stops s ON s.snapshot = times.snapshot AND s.stop_id = times.stop_id
+    WHERE NOT (times.pickup_type = 1 AND times.drop_off_type = 1)
+    ORDER BY s.snapshot DESC
+"""
+
+
 def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[StopChoice]:
     """Return the passenger stops of stored lines, with their lines and headsigns."""
     stops: dict[StopKey, Stop] = {}
@@ -158,21 +184,7 @@ def stop_choices(conn: sqlite3.Connection, keys: Collection[LineKey]) -> list[St
     headsigns: dict[StopKey, set[str]] = {}
     for key in keys:
         rows = conn.execute(
-            f"""
-            SELECT DISTINCT {_STOP_COLUMNS}, s.snapshot,
-                st.pickup_type != 1 AND st.stop_sequence < (
-                    SELECT max(last.stop_sequence) FROM stop_times last
-                    WHERE last.snapshot = st.snapshot AND last.trip_id = st.trip_id
-                ),
-                coalesce(st.headsign, t.headsign)
-            FROM lines l
-            JOIN trips t ON t.snapshot = l.snapshot AND t.route_id = l.route_id
-            JOIN stop_times st ON st.snapshot = t.snapshot AND st.trip_id = t.trip_id
-            JOIN stops s ON s.snapshot = st.snapshot AND s.stop_id = st.stop_id
-            WHERE l.route_type = ? AND l.short_name = ?
-                AND NOT (st.pickup_type = 1 AND st.drop_off_type = 1)
-            ORDER BY s.snapshot DESC
-            """,
+            STOP_CHOICES_SQL,
             (key.route_type, key.short_name),
         )
         for row in rows:
